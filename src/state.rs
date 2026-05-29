@@ -24,3 +24,33 @@ impl MarketState {
         Ok(unsafe { &*(bytes.as_ptr() as *const Self) })
     }
 }
+
+#[repr(C)]
+pub struct CreateMarketArgs {
+    pub market_id: u64,
+    pub settlement_deadline: i64,
+    pub bump_yes: u8,
+    pub bump_no: u8,
+}
+
+impl CreateMarketArgs {
+    pub const LEN: usize = 16;
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let market_id = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let settlement_deadline = i64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        let bump_yes = bytes[16];
+        let bump_no = bytes[17];
+
+        Ok(Self {
+            market_id,
+            settlement_deadline,
+            bump_yes,
+            bump_no,
+        })
+    }
+}
