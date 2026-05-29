@@ -1,0 +1,16 @@
+[package]
+name = "alley"
+version = "0.1.0"
+edition = "2024"
+
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+pinocchio = {version = "0.11.1", default-features = false, features = ["cpi"]}
+pinocchio-log = "0.5.1"
+pinocchio-system = "0.6.1"
+pinocchio-token = "0.6.0"
+pinocchio-associated-token-account = "0.4.0"
+solana-address = { version = "2.6.0", features = ["syscalls", "curve25519"] }
