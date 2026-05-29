@@ -5,6 +5,7 @@ use pinocchio::{
     program_entrypoint,
 };
 
+pub mod instructions;
 pub mod state;
 
 program_entrypoint!(process_instruction);
@@ -21,7 +22,11 @@ pub fn process_instruction(
         .ok_or(ProgramError::InvalidInstructionData)?;
 
     match discriminator {
-        0 => Ok(()),
+        0 => instructions::create_market::process_create_market(
+            program_id,
+            accounts,
+            instruction_data,
+        ),
         _ => Err(ProgramError::InvalidInstructionData),
     };
 

@@ -29,8 +29,8 @@ impl MarketState {
 pub struct CreateMarketArgs {
     pub market_id: u64,
     pub settlement_deadline: i64,
-    pub bump_yes: u8,
-    pub bump_no: u8,
+    pub bump_ot_a: u8,
+    pub bump_ot_b: u8,
 }
 
 impl CreateMarketArgs {
@@ -43,14 +43,14 @@ impl CreateMarketArgs {
 
         let market_id = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
         let settlement_deadline = i64::from_le_bytes(bytes[8..16].try_into().unwrap());
-        let bump_yes = bytes[16];
-        let bump_no = bytes[17];
+        let bump_ot_a = bytes[16];
+        let bump_ot_b = bytes[17];
 
         Ok(Self {
             market_id,
             settlement_deadline,
-            bump_yes,
-            bump_no,
+            bump_ot_a,
+            bump_ot_b,
         })
     }
 }
