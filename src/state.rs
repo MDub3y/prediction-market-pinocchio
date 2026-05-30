@@ -34,7 +34,7 @@ pub struct CreateMarketArgs {
 }
 
 impl CreateMarketArgs {
-    pub const LEN: usize = 16;
+    pub const LEN: usize = 18;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
@@ -70,6 +70,37 @@ pub struct UserMarketPosition {
 
 impl UserMarketPosition {
     pub const LEN: usize = 113;
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        Ok(unsafe { &*(bytes.as_ptr() as *const Self) })
+    }
+}
+
+#[repr(C)]
+#[derive(Clone)]
+pub struct Order {
+    pub user_position: Address,
+    pub quantity: u64,
+    pub order_id: u64,
+}
+
+#[repr(C)]
+pub struct OrderPage {
+    pub head: u32,
+    pub tail: u32,
+    pub price: u8,
+    pub side: u8,
+    pub outcome: u8,
+    pub padding: u8,
+    pub orders: [Order; 100],
+}
+
+impl OrderPage {
+    pub const LEN: usize = 4812;
+    pub const MAX_ORDERS: u32 = 100;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
         if bytes.len() < Self::LEN {
