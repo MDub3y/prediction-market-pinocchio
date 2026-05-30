@@ -30,6 +30,7 @@ pub fn process_instruction(
         1 => {
             instructions::deposit_collateral::process_deposit_collateral(program_id, accounts, rest)
         }
+        2 => instructions::place_order::process_place_order(program_id, accounts, rest),
         _ => Err(ProgramError::InvalidInstructionData),
     };
 
