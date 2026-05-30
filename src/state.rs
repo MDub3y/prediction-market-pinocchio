@@ -132,3 +132,41 @@ impl DepositCollateralArgs {
         })
     }
 }
+
+#[repr(C)]
+pub struct PlaceOrderArgs {
+    pub outcome: u8,
+    pub side: u8,
+    pub order_type: u8,
+    pub price: u8,
+    pub quantity: u64,
+    pub order_id: u64,
+    pub bump_order_page: u8,
+}
+
+impl PlaceOrderArgs {
+    pub const LEN: usize = 21;
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        let outcome = bytes[0];
+        let side = bytes[1];
+        let order_type = bytes[2];
+        let price = bytes[3];
+        let quantity = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
+        let order_id = u64::from_le_bytes(bytes[12..20].try_into().unwrap());
+        let bump_order_page = bytes[20];
+
+        Ok(Self {
+            outcome,
+            side,
+            order_type,
+            price,
+            quantity,
+            order_id,
+            bump_order_page,
+        })
+    }
+}
