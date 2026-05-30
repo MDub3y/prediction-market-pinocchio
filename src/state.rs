@@ -54,3 +54,27 @@ impl CreateMarketArgs {
         })
     }
 }
+
+#[repr(C)]
+pub struct UserMarketPosition {
+    pub user_wallet: Address,
+    pub market_pda: Address,
+    pub collateral_available: u64,
+    pub collateral_locked: u64,
+    pub ot_a_available: u64,
+    pub ot_a_locked: u64,
+    pub ot_b_available: u64,
+    pub ot_b_locked: u64,
+    pub bump: u8,
+}
+
+impl UserMarketPosition {
+    pub const LEN: usize = 113;
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        Ok(unsafe { &*(bytes.as_ptr() as *const Self) })
+    }
+}
