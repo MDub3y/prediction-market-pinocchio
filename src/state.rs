@@ -110,3 +110,25 @@ impl OrderPage {
         Ok(unsafe { &*(bytes.as_ptr() as *const Self) })
     }
 }
+
+#[repr(C)]
+pub struct DepositCollateralArgs {
+    pub amount: u64,
+    pub bump_user_position: u8,
+}
+
+impl DepositCollateralArgs {
+    pub const LEN: usize = 9;
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        let amount = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let bump_user_position = bytes[8];
+        Ok(Self {
+            amount,
+            bump_user_position,
+        })
+    }
+}

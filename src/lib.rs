@@ -27,6 +27,9 @@ pub fn process_instruction(
             accounts,
             instruction_data,
         ),
+        1 => {
+            instructions::deposit_collateral::process_deposit_collateral(program_id, accounts, rest)
+        }
         _ => Err(ProgramError::InvalidInstructionData),
     };
 
