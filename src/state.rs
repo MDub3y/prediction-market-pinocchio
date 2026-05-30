@@ -9,13 +9,14 @@ pub struct MarketState {
     pub outcome_a_mint: Address,
     pub outcome_b_mint: Address,
     pub collateral_mint: Address,
+    pub accumulated_fees: u64,
     pub is_settled: u8,
     pub market_status: u8,
     pub bump: u8,
 }
 
 impl MarketState {
-    pub const LEN: usize = 179;
+    pub const LEN: usize = 187;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
         if bytes.len() < Self::LEN {
