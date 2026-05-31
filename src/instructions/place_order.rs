@@ -5,7 +5,9 @@ use pinocchio::{
 };
 use pinocchio_system::instructions::CreateAccount;
 
-use crate::state::{Order, OrderPage, PlaceOrderArgs, UserMarketPosition};
+use crate::state::{MarketState, Order, OrderPage, PlaceOrderArgs, UserMarketPosition};
+
+const FEE_BASIS_POINTS: u64 = 20;
 
 pub fn process_place_order(
     program_id: &Address,
@@ -17,8 +19,8 @@ pub fn process_place_order(
         market_pda,
         user_market_position,
         order_page,
-        _system_program,
-        ..,
+        system_program,
+        remaining_accounts @ ..,
     ] = accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
@@ -91,11 +93,13 @@ pub fn process_place_order(
     }
 
     if args.order_type == 0 {
+        // limit order
         unsafe {
             let mut pos_data = user_market_position.borrow_unchecked_mut();
             let pos_mut = &mut *(pos_data.as_mut_ptr() as *mut UserMarketPosition);
 
             if args.side == 0 {
+                // bid
                 let total_cost = args.quantity * (args.price as u64);
                 if pos_mut.collateral_available < total_cost {
                     return Err(ProgramError::InsufficientFunds);
@@ -103,6 +107,7 @@ pub fn process_place_order(
                 pos_mut.collateral_available -= total_cost;
                 pos_mut.collateral_locked += total_cost;
             } else {
+                // ask
                 if args.outcome == 0 {
                     if pos_mut.ot_a_available < args.quantity {
                         return Err(ProgramError::InsufficientFunds);
@@ -124,7 +129,7 @@ pub fn process_place_order(
             let page_mut = &mut *(page_data.as_mut_ptr() as *mut OrderPage);
 
             let current_tail = page_mut.tail;
-            let next_tail = (current_tail + 1) % OrderPage::MAX_ORDERS;
+            let next_tail = (current_tail + 1) & OrderPage::MAX_ORDERS;
 
             if next_tail == page_mut.head {
                 return Err(ProgramError::InvalidArgument);
@@ -138,8 +143,121 @@ pub fn process_place_order(
             page_mut.tail = next_tail;
         }
     } else {
-        return Err(ProgramError::Custom(101));
-    }
+        // market order
+        let mut taker_remaining_qty = args.quantity;
 
+        unsafe {
+            let mut page_data = order_page.borrow_unchecked_mut();
+            let page_mut = &mut *(page_data.as_mut_ptr() as *mut OrderPage);
+
+            let mut market_data = market_pda.borrow_unchecked_mut();
+            let market_mut = &mut *(market_data.as_mut_ptr() as *mut MarketState);
+
+            let mut taker_pos_data = user_market_position.borrow_unchecked_mut();
+            let taker_pos_mut = &mut *(taker_pos_data.as_mut_ptr() as *mut UserMarketPosition);
+
+            if args.side == 0 && page_mut.side != 1 {
+                return Err(ProgramError::InvalidArgument);
+            }
+            if args.side == 1 && page_mut.side != 0 {
+                return Err(ProgramError::InvalidArgument);
+            }
+
+            while taker_remaining_qty > 0 && page_mut.head != page_mut.tail {
+                let current_head = page_mut.head as usize;
+                let maker_order = &mut page_mut.orders[current_head];
+
+                // locate matching maker position account inside remaining accounts array
+                let mut maker_account_found = false;
+                for account in remaining_accounts.iter_mut() {
+                    if account.address() == &maker_order.user_position {
+                        maker_account_found = true;
+
+                        let mut maker_pos_data = account.borrow_unchecked_mut();
+                        let maker_pos_mut =
+                            &mut *(maker_pos_data.as_mut_ptr() as *mut UserMarketPosition);
+
+                        let match_qty = if taker_remaining_qty < maker_order.quantity {
+                            taker_remaining_qty
+                        } else {
+                            maker_order.quantity
+                        };
+
+                        let collateral_value = match_qty * (page_mut.price as u64);
+                        let fee_deduction = (collateral_value * FEE_BASIS_POINTS) / 10_000;
+                        let net_collateral = collateral_value - fee_deduction;
+
+                        // Apply dual-entry clearing accounting matrix based on transaction side
+                        if args.side == 0 {
+                            // Taker is Buyer (Bid) vs Maker resting Seller (Ask)
+                            if taker_pos_mut.collateral_available < collateral_value {
+                                return Err(ProgramError::InsufficientFunds);
+                            }
+
+                            // Settle Maker (Resting Seller)
+                            if page_mut.outcome == 0 {
+                                maker_pos_mut.ot_a_locked -= match_qty;
+                            } else {
+                                maker_pos_mut.ot_b_locked -= match_qty;
+                            }
+                            maker_pos_mut.collateral_available += net_collateral;
+
+                            // Settle Taker (Aggressive Buyer)
+                            taker_pos_mut.collateral_available -= collateral_value;
+                            if page_mut.outcome == 0 {
+                                taker_pos_mut.ot_a_available += match_qty;
+                            } else {
+                                taker_pos_mut.ot_b_available += match_qty;
+                            }
+                        } else {
+                            // Taker is Seller (Ask) vs Maker resting Buyer (Bid)
+                            if page_mut.outcome == 0 {
+                                if taker_pos_mut.ot_a_available < match_qty {
+                                    return Err(ProgramError::InsufficientFunds);
+                                }
+                                taker_pos_mut.ot_a_available -= match_qty;
+                            } else {
+                                if taker_pos_mut.ot_b_available < match_qty {
+                                    return Err(ProgramError::InsufficientFunds);
+                                }
+                                taker_pos_mut.ot_b_available -= match_qty;
+                            }
+
+                            // Settle Maker (Resting Buyer)
+                            maker_pos_mut.collateral_locked -= collateral_value;
+                            if page_mut.outcome == 0 {
+                                maker_pos_mut.ot_a_available += match_qty;
+                            } else {
+                                maker_pos_mut.ot_b_available += match_qty;
+                            }
+
+                            // Settle Taker (Aggressive Seller)
+                            taker_pos_mut.collateral_available += net_collateral;
+                        }
+
+                        // Accumulate platform monetization variables in state ledger
+                        market_mut.accumulated_fees += fee_deduction;
+
+                        // Update execution parameters
+                        taker_remaining_qty -= match_qty;
+                        maker_order.quantity -= match_qty;
+
+                        // Advance FIFO ring buffer index if depth slot is completely cleared
+                        if maker_order.quantity == 0 {
+                            page_mut.head = (page_mut.head + 1) % OrderPage::MAX_ORDERS;
+                        }
+                        break;
+                    }
+                }
+
+                if !maker_account_found {
+                    return Err(ProgramError::NotEnoughAccountKeys);
+                }
+            }
+        }
+        if taker_remaining_qty > 0 {
+            return Err(ProgramError::InvalidArgument); // Order Book Insufficient Depth
+        }
+    }
     Ok(())
 }
