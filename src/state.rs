@@ -96,12 +96,10 @@ impl CreateMarketArgs {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
         }
-
         let market_id = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
         let settlement_deadline = i64::from_le_bytes(bytes[8..16].try_into().unwrap());
         let bump_ot_a = bytes[16];
         let bump_ot_b = bytes[17];
-
         Ok(Self {
             market_id,
             settlement_deadline,
@@ -142,10 +140,11 @@ pub struct PlaceOrderArgs {
     pub quantity: u64,
     pub order_id: u64,
     pub bump_order_page: u8,
+    pub num_pages: u8,
 }
 
 impl PlaceOrderArgs {
-    pub const LEN: usize = 21;
+    pub const LEN: usize = 22;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
@@ -158,6 +157,7 @@ impl PlaceOrderArgs {
         let quantity = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
         let order_id = u64::from_le_bytes(bytes[12..20].try_into().unwrap());
         let bump_order_page = bytes[20];
+        let num_pages = bytes[21];
 
         Ok(Self {
             outcome,
@@ -167,6 +167,7 @@ impl PlaceOrderArgs {
             quantity,
             order_id,
             bump_order_page,
+            num_pages,
         })
     }
 }
