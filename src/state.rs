@@ -1,5 +1,23 @@
 use pinocchio::{Address, error::ProgramError};
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum MarketTier {
+    Small = 0,
+    Medium = 1,
+    Large = 2,
+}
+
+impl MarketTier {
+    pub fn from_u8(val: u8) -> Result<Self, ProgramError> {
+        match val {
+            0 => Ok(MarketTier::Small),
+            1 => Ok(MarketTier::Medium),
+            2 => Ok(MarketTier::Large),
+            _ => Err(ProgramError::InvalidArgument),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct MarketState {
     pub creator: Address,
