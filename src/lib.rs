@@ -6,6 +6,7 @@ use pinocchio::{
 };
 
 pub mod instructions;
+pub mod log;
 pub mod state;
 
 program_entrypoint!(process_instruction);
