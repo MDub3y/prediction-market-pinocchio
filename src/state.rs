@@ -172,6 +172,26 @@ impl CreateMarketArgs {
 }
 
 #[repr(C)]
+pub struct InitializeOrderBookArgs {
+    pub bump_book_a: u8,
+    pub bump_book_b: u8,
+}
+
+impl InitializeOrderBookArgs {
+    pub const LEN: usize = 2;
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        Ok(Self {
+            bump_book_a: bytes[0],
+            bump_book_b: bytes[1],
+        })
+    }
+}
+
+#[repr(C)]
 pub struct DepositCollateralArgs {
     pub amount: u64,
     pub bump_user_position: u8,
@@ -201,12 +221,10 @@ pub struct PlaceOrderArgs {
     pub price: u8,
     pub quantity: u64,
     pub order_id: u64,
-    pub bump_order_page: u8,
-    pub num_pages: u8,
 }
 
 impl PlaceOrderArgs {
-    pub const LEN: usize = 22;
+    pub const LEN: usize = 20;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
@@ -218,8 +236,6 @@ impl PlaceOrderArgs {
         let price = bytes[3];
         let quantity = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
         let order_id = u64::from_le_bytes(bytes[12..20].try_into().unwrap());
-        let bump_order_page = bytes[20];
-        let num_pages = bytes[21];
 
         Ok(Self {
             outcome,
@@ -228,8 +244,6 @@ impl PlaceOrderArgs {
             price,
             quantity,
             order_id,
-            bump_order_page,
-            num_pages,
         })
     }
 }
