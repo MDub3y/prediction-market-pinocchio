@@ -19,6 +19,16 @@ impl MarketTier {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub struct MarketSizeParams {
+    pub max_bids: u32,
+    pub max_asks: u32,
+    pub max_seats: u32,
+    pub tier_flag: u8,
+    pub padding: [u8; 3],
+}
+
+#[repr(C)]
 pub struct MarketState {
     pub creator: Address,
     pub market_id: u64,
@@ -27,14 +37,18 @@ pub struct MarketState {
     pub outcome_a_mint: Address,
     pub outcome_b_mint: Address,
     pub collateral_mint: Address,
+    pub orderbook_a: Address,
+    pub orderbook_b: Address,
     pub accumulated_fees: u64,
+    pub size_params: MarketSizeParams,
     pub is_settled: u8,
     pub market_status: u8,
     pub bump: u8,
+    pub padding: u8,
 }
 
 impl MarketState {
-    pub const LEN: usize = 187;
+    pub const LEN: usize = 268;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
         if bytes.len() < Self::LEN {
