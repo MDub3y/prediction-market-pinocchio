@@ -84,33 +84,60 @@ impl UserMarketPosition {
 
 #[repr(C)]
 #[derive(Clone)]
-pub struct Order {
-    pub user_position: Address,
+pub struct PriceLevel {
+    pub head: u32,
+    pub tail: u32,
+}
+
+#[repr(C)]
+#[derive(Clone)]
+pub struct OrderNode {
+    pub user_seat_idx: u32,
     pub quantity: u64,
+    pub next_idx: u32,
     pub order_id: u64,
 }
 
 #[repr(C)]
-pub struct OrderPage {
-    pub head: u32,
-    pub tail: u32,
-    pub price: u8,
-    pub side: u8,
-    pub outcome: u8,
-    pub padding: u8,
-    pub orders: [Order; 100],
+#[derive(Clone, Default)]
+pub struct TraderSeat {
+    pub wallet: Address,
+    pub collateral_claimable: u64,
+    pub shares_claimable: u64,
 }
 
-impl OrderPage {
-    pub const LEN: usize = 4812;
-    pub const MAX_ORDERS: u32 = 100;
+#[repr(C)]
+pub struct OrderBookHeader {
+    pub market_state_pda: Address,
+    pub total_allocated_seats: u32,
+    pub next_free_node_idx: u32,
+    pub outcome_index: u8,
+    pub padding: [u8; 3],
+}
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
-        if bytes.len() < Self::LEN {
-            return Err(ProgramError::InvalidAccountData);
-        }
-        Ok(unsafe { &*(bytes.as_ptr() as *const Self) })
-    }
+pub const SMALL_SEATS: usize = 128;
+pub const SMALL_ORDERS: usize = 256;
+
+pub const MEDIUM_SEATS: usize = 1024;
+pub const MEDIUM_ORDERS: usize = 2048;
+
+pub const LARGE_SEATS: usize = 4096;
+pub const LARGE_ORDERS: usize = 8192;
+
+pub fn calculate_orderbook_space(tier: MarketTier) -> usize {
+    let header_size = core::mem::size_of::<OrderBookHeader>();
+    let directory_size = core::mem::size_of::<PriceLevel>() * 100 * 2;
+
+    let (seats, orders) = match tier {
+        MarketTier::Small => (SMALL_SEATS, SMALL_ORDERS * 2),
+        MarketTier::Medium => (MEDIUM_SEATS, MEDIUM_ORDERS * 2),
+        MarketTier::Large => (LARGE_SEATS, LARGE_ORDERS * 2),
+    };
+
+    let seats_pool_size = core::mem::size_of::<TraderSeat>() * seats;
+    let orders_pool_size = core::mem::size_of::<OrderNode>() * orders;
+
+    header_size + directory_size + seats_pool_size + orders_pool_size
 }
 
 #[repr(C)]
@@ -119,10 +146,11 @@ pub struct CreateMarketArgs {
     pub settlement_deadline: i64,
     pub bump_ot_a: u8,
     pub bump_ot_b: u8,
+    pub tier: u8,
 }
 
 impl CreateMarketArgs {
-    pub const LEN: usize = 18;
+    pub const LEN: usize = 19;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
@@ -132,11 +160,13 @@ impl CreateMarketArgs {
         let settlement_deadline = i64::from_le_bytes(bytes[8..16].try_into().unwrap());
         let bump_ot_a = bytes[16];
         let bump_ot_b = bytes[17];
+        let tier = bytes[18];
         Ok(Self {
             market_id,
             settlement_deadline,
             bump_ot_a,
             bump_ot_b,
+            tier,
         })
     }
 }
