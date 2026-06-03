@@ -1,11 +1,8 @@
-use pinocchio::{
-    AccountView, Address, ProgramResult,
-    cpi::{Seed, Signer},
-    error::ProgramError,
+use crate::state::{
+    MarketState, MarketTier, OrderBookHeader, OrderNode, PlaceOrderArgs, PriceLevel, TraderSeat,
+    UserMarketPosition,
 };
-use pinocchio_system::instructions::CreateAccount;
-
-use crate::state::{MarketState, OrderPage, PlaceOrderArgs, UserMarketPosition};
+use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 const FEE_BASIS_POINTS: u64 = 20;
 
@@ -14,105 +11,110 @@ pub fn process_place_order(
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let [
-        user,
-        market_pda,
-        user_market_position,
-        system_program,
-        remaining_accounts @ ..,
-    ] = accounts
-    else {
+    let [user, market_pda, user_market_position, monolithic_book, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
     let args = PlaceOrderArgs::from_bytes(instruction_data)?;
-
     if !user.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
     }
 
+    if args.price < 1 || args.price > 99 {
+        return Err(ProgramError::InvalidArgument);
+    }
+
+    let tier = unsafe {
+        let data = market_pda.borrow_unchecked();
+        let state = MarketState::from_bytes(&data)?;
+        if args.outcome == 0 {
+            if state.orderbook_a != *monolithic_book.address() {
+                return Err(ProgramError::InvalidArgument);
+            }
+        } else {
+            if state.orderbook_b != *monolithic_book.address() {
+                return Err(ProgramError::InvalidArgument);
+            }
+        }
+        MarketTier::from_u8(state.size_params.tier_flag)?
+    };
+
+    let max_seats = match tier {
+        MarketTier::Small => crate::state::SMALL_SEATS,
+        MarketTier::Medium => crate::state::MEDIUM_SEATS,
+        MarketTier::Large => crate::state::LARGE_SEATS,
+    };
+
+    let max_orders = match tier {
+        MarketTier::Small => crate::state::SMALL_ORDERS * 2,
+        MarketTier::Medium => crate::state::MEDIUM_ORDERS * 2,
+        MarketTier::Large => crate::state::LARGE_ORDERS * 2,
+    };
+
+    let offset_dir = core::mem::size_of::<OrderBookHeader>();
+    let offset_seats = offset_dir + (core::mem::size_of::<PriceLevel>() * 200);
+    let offset_orders = offset_seats + (core::mem::size_of::<TraderSeat>() * max_seats);
+
     unsafe {
-        let data = user_market_position.borrow_unchecked();
-        let pos = UserMarketPosition::from_bytes(&data)?;
-        if pos.user_wallet != *user.address() || pos.market_pda != *market_pda.address() {
+        let mut book_data = monolithic_book.borrow_unchecked_mut();
+        let book_ptr = book_data.as_mut_ptr();
+
+        let header = &mut *(book_ptr as *mut OrderBookHeader);
+        if header.market_state_pda != *market_pda.address() {
             return Err(ProgramError::InvalidArgument);
         }
-    }
 
-    if (args.num_pages as usize) > remaining_accounts.len() {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    }
-    let (pages, makers) = remaining_accounts.split_at_mut(args.num_pages as usize);
+        let dir_slice =
+            core::slice::from_raw_parts_mut(book_ptr.add(offset_dir) as *mut PriceLevel, 200);
+        let seats_slice = core::slice::from_raw_parts_mut(
+            book_ptr.add(offset_seats) as *mut TraderSeat,
+            max_seats,
+        );
 
-    if args.order_type == 0 {
-        if pages.is_empty() {
-            return Err(ProgramError::NotEnoughAccountKeys);
-        }
-        let target_page = &mut pages[0];
+        let orders_slice = core::slice::from_raw_parts_mut(
+            book_ptr.add(offset_orders) as *mut OrderNode,
+            max_orders,
+        );
 
-        let price_slice = [args.price];
-        let side_slice = [args.side];
-        let outcome_slice = [args.outcome];
-        let bump_slice = [args.bump_order_page];
-
-        let page_raw_seeds: &[&[u8]] = &[
-            b"order_page",
-            market_pda.address().as_ref(),
-            &outcome_slice,
-            &side_slice,
-            &price_slice,
-            &bump_slice,
-        ];
-        let expected_page_address = Address::create_program_address(page_raw_seeds, program_id)
-            .map_err(|_| ProgramError::InvalidSeeds)?;
-
-        if target_page.address() != &expected_page_address {
-            return Err(ProgramError::InvalidSeeds);
-        }
-
-        if target_page.data_len() == 0 {
-            let page_signer_seeds = [
-                Seed::from(b"order_page"),
-                Seed::from(market_pda.address().as_ref()),
-                Seed::from(outcome_slice.as_ref()),
-                Seed::from(side_slice.as_ref()),
-                Seed::from(price_slice.as_ref()),
-                Seed::from(bump_slice.as_ref()),
-            ];
-            let page_signer = Signer::from(&page_signer_seeds);
-
-            CreateAccount {
-                from: user,
-                to: target_page,
-                lamports: target_page.lamports(),
-                space: OrderPage::LEN as u64,
-                owner: program_id,
-            }
-            .invoke_signed(&[page_signer])?;
-
-            unsafe {
-                let mut data_slice = target_page.borrow_unchecked_mut();
-                let page_mut = &mut *(data_slice.as_mut_ptr() as *mut OrderPage);
-                page_mut.head = 0;
-                page_mut.tail = 0;
-                page_mut.price = args.price;
-                page_mut.side = args.side;
-                page_mut.outcome = args.outcome;
-                page_mut.padding = 0;
+        let mut seat_idx: Option<usize> = None;
+        for i in 0..(header.total_allocated_seats as usize) {
+            if seats_slice[i].wallet == *user.address() {
+                seat_idx = Some(i);
+                break;
             }
         }
 
-        unsafe {
+        if seat_idx.is_none() {
+            let next_seat = header.total_allocated_seats as usize;
+            if next_seat >= max_seats {
+                return Err(ProgramError::Custom(202));
+            }
+            seats_slice[next_seat].wallet = user.address().clone();
+            seats_slice[next_seat].collateral_claimable = 0;
+            seats_slice[next_seat].shares_claimable = 0;
+            header.total_allocated_seats += 1;
+            seat_idx = Some(next_seat);
+        }
+        let active_seat_idx = seat_idx.unwrap() as u32;
+
+        let directory_index = (args.side as usize * 100) + args.price as usize;
+
+        if args.order_type == 0 {
+            let free_idx = header.next_free_node_idx;
+            if free_idx == 0 {
+                return Err(ProgramError::Custom(203));
+            }
+
             let mut pos_data = user_market_position.borrow_unchecked_mut();
             let pos_mut = &mut *(pos_data.as_mut_ptr() as *mut UserMarketPosition);
 
             if args.side == 0 {
-                let total_cost = args.quantity * (args.price as u64);
-                if pos_mut.collateral_available < total_cost {
+                let cost = args.quantity * (args.price as u64);
+                if pos_mut.collateral_available < cost {
                     return Err(ProgramError::InsufficientFunds);
                 }
-                pos_mut.collateral_available -= total_cost;
-                pos_mut.collateral_locked += total_cost;
+                pos_mut.collateral_available -= cost;
+                pos_mut.collateral_locked += cost;
             } else {
                 if args.outcome == 0 {
                     if pos_mut.ot_a_available < args.quantity {
@@ -128,157 +130,98 @@ pub fn process_place_order(
                     pos_mut.ot_b_locked += args.quantity;
                 }
             }
-        }
 
-        unsafe {
-            let mut page_data = target_page.borrow_unchecked_mut();
-            let page_mut = &mut *(page_data.as_mut_ptr() as *mut OrderPage);
+            header.next_free_node_idx = orders_slice[free_idx as usize].next_idx;
 
-            let current_tail = page_mut.tail;
-            let next_tail = (current_tail + 1) % OrderPage::MAX_ORDERS;
+            let new_node = &mut orders_slice[free_idx as usize];
+            new_node.user_seat_idx = active_seat_idx;
+            new_node.quantity = args.quantity;
+            new_node.order_id = args.order_id;
+            new_node.next_idx = 0;
 
-            if next_tail == page_mut.head {
-                return Err(ProgramError::InvalidArgument);
+            let level = &mut dir_slice[directory_index];
+            if level.tail == 0 {
+                level.head = free_idx;
+                level.tail = free_idx;
+            } else {
+                orders_slice[level.tail as usize].next_idx = free_idx;
+                level.tail = free_idx;
             }
+        } else {
+            let counter_side = if args.side == 0 { 1 } else { 0 };
+            let target_dir_index = (counter_side * 100) + args.price as usize;
 
-            let order_slot = &mut page_mut.orders[current_tail as usize];
-            order_slot.user_position = user_market_position.address().clone();
-            order_slot.quantity = args.quantity;
-            order_slot.order_id = args.order_id;
+            let mut taker_remaining = args.quantity;
+            let level = &mut dir_slice[target_dir_index];
 
-            page_mut.tail = next_tail;
-        }
-    } else {
-        let mut taker_remaining_qty = args.quantity;
-        let mut last_processed_price: Option<u8> = None;
-
-        unsafe {
-            let mut market_data = market_pda.borrow_unchecked_mut();
-            let market_mut = &mut *(market_data.as_mut_ptr() as *mut MarketState);
+            let mut market_state_data = market_pda.borrow_unchecked_mut();
+            let market_mut = &mut *(market_state_data.as_mut_ptr() as *mut MarketState);
 
             let mut taker_pos_data = user_market_position.borrow_unchecked_mut();
             let taker_pos_mut = &mut *(taker_pos_data.as_mut_ptr() as *mut UserMarketPosition);
 
-            for page_account in pages.iter_mut() {
-                if taker_remaining_qty == 0 {
-                    break;
-                }
+            while taker_remaining > 0 && level.head != 0 {
+                let head_node_idx = level.head as usize;
+                let maker_order = &mut orders_slice[head_node_idx];
+                let maker_seat = &mut seats_slice[maker_order.user_seat_idx as usize];
 
-                if page_account.data_len() == 0 {
-                    continue;
-                }
+                let match_qty = if taker_remaining < maker_order.quantity {
+                    taker_remaining
+                } else {
+                    maker_order.quantity
+                };
+                let trade_collateral = match_qty * (args.price as u64);
+                let fee = (trade_collateral * FEE_BASIS_POINTS) / 10_000;
+                let net_collateral = trade_collateral - fee;
 
-                let mut page_data = page_account.borrow_unchecked_mut();
-                let page_mut = &mut *(page_data.as_mut_ptr() as *mut OrderPage);
-
-                if page_mut.outcome != args.outcome {
-                    return Err(ProgramError::InvalidArgument);
-                }
-                if args.side == 0 && page_mut.side != 1 {
-                    return Err(ProgramError::InvalidArgument);
-                }
-                if args.side == 1 && page_mut.side != 0 {
-                    return Err(ProgramError::InvalidArgument);
-                }
-
-                if let Some(prev_price) = last_processed_price {
-                    if args.side == 0 && page_mut.price < prev_price {
-                        return Err(ProgramError::InvalidArgument);
+                if args.side == 0 {
+                    if taker_pos_mut.collateral_available < trade_collateral {
+                        return Err(ProgramError::InsufficientFunds);
                     }
-                    if args.side == 1 && page_mut.price > prev_price {
-                        return Err(ProgramError::InvalidArgument);
+                    maker_seat.collateral_claimable += net_collateral;
+                    taker_pos_mut.collateral_available -= trade_collateral;
+                    if args.outcome == 0 {
+                        taker_pos_mut.ot_a_available += match_qty;
+                    } else {
+                        taker_pos_mut.ot_b_available += match_qty;
                     }
-                }
-                last_processed_price = Some(page_mut.price);
-
-                while taker_remaining_qty > 0 && page_mut.head != page_mut.tail {
-                    let current_head = page_mut.head as usize;
-                    let maker_order = &mut page_mut.orders[current_head];
-
-                    let mut maker_account_found = false;
-                    for account in makers.iter_mut() {
-                        if account.address() == &maker_order.user_position {
-                            maker_account_found = true;
-
-                            let mut maker_pos_data = account.borrow_unchecked_mut();
-                            let maker_pos_mut =
-                                &mut *(maker_pos_data.as_mut_ptr() as *mut UserMarketPosition);
-
-                            let match_qty = if taker_remaining_qty < maker_order.quantity {
-                                taker_remaining_qty
-                            } else {
-                                maker_order.quantity
-                            };
-
-                            let collateral_value = match_qty * (page_mut.price as u64);
-                            let fee_deduction = (collateral_value * FEE_BASIS_POINTS) / 10_000;
-                            let net_collateral = collateral_value - fee_deduction;
-
-                            if args.side == 0 {
-                                // Taker is Buyer (Bid) vs Maker resting Seller (Ask)
-                                if taker_pos_mut.collateral_available < collateral_value {
-                                    return Err(ProgramError::InsufficientFunds);
-                                }
-
-                                if page_mut.outcome == 0 {
-                                    maker_pos_mut.ot_a_locked -= match_qty;
-                                } else {
-                                    maker_pos_mut.ot_b_locked -= match_qty;
-                                }
-                                maker_pos_mut.collateral_available += net_collateral;
-
-                                taker_pos_mut.collateral_available -= collateral_value;
-                                if page_mut.outcome == 0 {
-                                    taker_pos_mut.ot_a_available += match_qty;
-                                } else {
-                                    taker_pos_mut.ot_b_available += match_qty;
-                                }
-                            } else {
-                                // Taker is Seller (Ask) vs Maker resting Buyer (Bid)
-                                if page_mut.outcome == 0 {
-                                    if taker_pos_mut.ot_a_available < match_qty {
-                                        return Err(ProgramError::InsufficientFunds);
-                                    }
-                                    taker_pos_mut.ot_a_available -= match_qty;
-                                } else {
-                                    if taker_pos_mut.ot_b_available < match_qty {
-                                        return Err(ProgramError::InsufficientFunds);
-                                    }
-                                    taker_pos_mut.ot_b_available -= match_qty;
-                                }
-
-                                maker_pos_mut.collateral_locked -= collateral_value;
-                                if page_mut.outcome == 0 {
-                                    maker_pos_mut.ot_a_available += match_qty;
-                                } else {
-                                    maker_pos_mut.ot_b_available += match_qty;
-                                }
-
-                                taker_pos_mut.collateral_available += net_collateral;
-                            }
-
-                            market_mut.accumulated_fees += fee_deduction;
-
-                            taker_remaining_qty -= match_qty;
-                            maker_order.quantity -= match_qty;
-
-                            if maker_order.quantity == 0 {
-                                page_mut.head = (page_mut.head + 1) % OrderPage::MAX_ORDERS;
-                            }
-                            break;
+                } else {
+                    if args.outcome == 0 {
+                        if taker_pos_mut.ot_a_available < match_qty {
+                            return Err(ProgramError::InsufficientFunds);
                         }
+                        taker_pos_mut.ot_a_available -= match_qty;
+                    } else {
+                        if taker_pos_mut.ot_b_available < match_qty {
+                            return Err(ProgramError::InsufficientFunds);
+                        }
+                        taker_pos_mut.ot_b_available -= match_qty;
                     }
+                    maker_seat.shares_claimable += match_qty;
+                    taker_pos_mut.collateral_available += net_collateral;
+                }
 
-                    if !maker_account_found {
-                        return Err(ProgramError::NotEnoughAccountKeys);
+                market_mut.accumulated_fees += fee;
+                taker_remaining -= match_qty;
+                maker_order.quantity -= match_qty;
+
+                if maker_order.quantity == 0 {
+                    let next_head = maker_order.next_idx;
+                    maker_order.next_idx = header.next_free_node_idx;
+                    header.next_free_node_idx = level.head;
+
+                    level.head = next_head;
+                    if next_head == 0 {
+                        level.tail = 0;
                     }
                 }
             }
-        }
 
-        if taker_remaining_qty > 0 {
-            return Err(ProgramError::InvalidArgument);
+            if taker_remaining > 0 {
+                return Err(ProgramError::InvalidArgument);
+            }
         }
     }
+
     Ok(())
 }
