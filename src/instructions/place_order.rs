@@ -47,29 +47,40 @@ pub fn process_place_order(
         }
 
         let mut seat_idx: Option<usize> = None;
+        let mut available_tombstone_idx: Option<usize> = None;
+
         for i in 0..(view.header.total_allocated_seats as usize) {
             if view.seats[i].wallet == *user.address() {
                 seat_idx = Some(i);
                 break;
+            }
+            if view.seats[i].wallet == Address::default() && available_tombstone_idx.is_none() {
+                available_tombstone_idx = Some(i);
             }
         }
 
         let needs_seat = args.order_type == 0 || args.side == 0;
 
         if seat_idx.is_none() && needs_seat {
-            let next_seat = view.header.total_allocated_seats as usize;
-            if next_seat >= view.seats.len() {
-                return Err(ProgramError::Custom(202));
-            }
-            view.seats[next_seat].wallet = user.address().clone();
-            view.seats[next_seat].collateral_locked = 0;
-            view.seats[next_seat].ot_a_locked = 0;
-            view.seats[next_seat].ot_b_locked = 0;
-            view.seats[next_seat].collateral_claimable = 0;
-            view.seats[next_seat].ot_a_claimable = 0;
-            view.seats[next_seat].ot_b_claimable = 0;
-            view.header.total_allocated_seats += 1;
-            seat_idx = Some(next_seat);
+            let target_seat_slot = if let Some(t_idx) = available_tombstone_idx {
+                t_idx
+            } else {
+                let next_seat = view.header.total_allocated_seats as usize;
+                if next_seat >= view.seats.len() {
+                    return Err(ProgramError::Custom(202));
+                }
+                view.header.total_allocated_seats += 1;
+                next_seat
+            };
+
+            view.seats[target_seat_slot].wallet = user.address().clone();
+            view.seats[target_seat_slot].collateral_locked = 0;
+            view.seats[target_seat_slot].ot_a_locked = 0;
+            view.seats[target_seat_slot].ot_b_locked = 0;
+            view.seats[target_seat_slot].collateral_claimable = 0;
+            view.seats[target_seat_slot].ot_a_claimable = 0;
+            view.seats[target_seat_slot].ot_b_claimable = 0;
+            seat_idx = Some(target_seat_slot);
         }
 
         let directory_index = (args.side as usize * 100) + args.price as usize;
