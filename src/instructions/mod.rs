@@ -1,3 +1,4 @@
+pub mod cancel_order;
 pub mod create_market;
 pub mod deposit_collateral;
 pub mod initialize_orderbooks;
