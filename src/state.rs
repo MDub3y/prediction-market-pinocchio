@@ -19,16 +19,6 @@ impl MarketTier {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub struct MarketSizeParams {
-    pub max_bids: u32,
-    pub max_asks: u32,
-    pub max_seats: u32,
-    pub tier_flag: u8,
-    pub padding: [u8; 3],
-}
-
-#[repr(C)]
 pub struct MarketState {
     pub creator: Address,
     pub market_id: u64,
@@ -40,11 +30,10 @@ pub struct MarketState {
     pub orderbook_a: Address,
     pub orderbook_b: Address,
     pub accumulated_fees: u64,
-    pub size_params: MarketSizeParams,
+    pub tier: u8,
     pub is_settled: u8,
     pub market_status: u8,
     pub bump: u8,
-    pub padding: u8,
 }
 
 impl MarketState {
@@ -59,20 +48,14 @@ impl MarketState {
 }
 
 #[repr(C)]
-pub struct UserMarketPosition {
-    pub user_wallet: Address,
-    pub market_pda: Address,
+pub struct PlatformUserState {
+    pub wallet: Address,
     pub collateral_available: u64,
-    pub collateral_locked: u64,
-    pub ot_a_available: u64,
-    pub ot_a_locked: u64,
-    pub ot_b_available: u64,
-    pub ot_b_locked: u64,
     pub bump: u8,
 }
 
-impl UserMarketPosition {
-    pub const LEN: usize = 113;
+impl PlatformUserState {
+    pub const LEN: usize = 41;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
         if bytes.len() < Self::LEN {
@@ -83,14 +66,14 @@ impl UserMarketPosition {
 }
 
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, Copy, Default)]
 pub struct PriceLevel {
     pub head: u32,
     pub tail: u32,
 }
 
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, Copy, Default)]
 pub struct OrderNode {
     pub user_seat_idx: u32,
     pub quantity: u64,
@@ -133,15 +116,54 @@ pub fn calculate_orderbook_space(tier: MarketTier) -> usize {
     let directory_size = core::mem::size_of::<PriceLevel>() * 100 * 2;
 
     let (seats, orders) = match tier {
-        MarketTier::Small => (SMALL_SEATS, SMALL_ORDERS * 2),
-        MarketTier::Medium => (MEDIUM_SEATS, MEDIUM_ORDERS * 2),
-        MarketTier::Large => (LARGE_SEATS, LARGE_ORDERS * 2),
+        MarketTier::Small => (SMALL_SEATS, SMALL_ORDERS),
+        MarketTier::Medium => (MEDIUM_SEATS, MEDIUM_ORDERS),
+        MarketTier::Large => (LARGE_SEATS, LARGE_ORDERS),
     };
 
-    let seats_pool_size = core::mem::size_of::<TraderSeat>() * seats;
-    let orders_pool_size = core::mem::size_of::<OrderNode>() * orders;
+    header_size
+        + directory_size
+        + (core::mem::size_of::<TraderSeat>() * seats)
+        + (core::mem::size_of::<OrderNode>() * orders)
+}
 
-    header_size + directory_size + seats_pool_size + orders_pool_size
+pub struct OrderBookView<'a> {
+    pub header: &'a mut OrderBookHeader,
+    pub directory: &'a mut [PriceLevel],
+    pub seats: &'a mut [TraderSeat],
+    pub orders: &'a mut [OrderNode],
+}
+
+impl<'a> OrderBookView<'a> {
+    pub unsafe fn load(ptr: *mut u8, tier: MarketTier) -> Self {
+        let max_seats = match tier {
+            MarketTier::Small => SMALL_SEATS,
+            MarketTier::Medium => MEDIUM_SEATS,
+            MarketTier::Large => LARGE_SEATS,
+        };
+        let max_orders = match tier {
+            MarketTier::Small => SMALL_ORDERS,
+            MarketTier::Medium => MEDIUM_ORDERS,
+            MarketTier::Large => LARGE_ORDERS,
+        };
+
+        let offset_dir = core::mem::size_of::<OrderBookHeader>();
+        let offset_seats = offset_dir + (core::mem::size_of::<PriceLevel>() * 200);
+        let offset_orders = offset_seats + (core::mem::size_of::<TraderSeat>() * max_seats);
+
+        Self {
+            header: &mut *(ptr as *mut OrderBookHeader),
+            directory: core::slice::from_raw_parts_mut(ptr.add(offset_dir) as *mut PriceLevel, 200),
+            seats: core::slice::from_raw_parts_mut(
+                ptr.add(offset_seats) as *mut TraderSeat,
+                max_seats,
+            ),
+            orders: core::slice::from_raw_parts_mut(
+                ptr.add(offset_orders) as *mut OrderNode,
+                max_orders,
+            ),
+        }
+    }
 }
 
 #[repr(C)]
@@ -229,25 +251,17 @@ pub struct PlaceOrderArgs {
 
 impl PlaceOrderArgs {
     pub const LEN: usize = 20;
-
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
         }
-        let outcome = bytes[0];
-        let side = bytes[1];
-        let order_type = bytes[2];
-        let price = bytes[3];
-        let quantity = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
-        let order_id = u64::from_le_bytes(bytes[12..20].try_into().unwrap());
-
         Ok(Self {
-            outcome,
-            side,
-            order_type,
-            price,
-            quantity,
-            order_id,
+            outcome: bytes[0],
+            side: bytes[1],
+            order_type: bytes[2],
+            price: bytes[3],
+            quantity: u64::from_le_bytes(bytes[4..12].try_into().unwrap()),
+            order_id: u64::from_le_bytes(bytes[12..20].try_into().unwrap()),
         })
     }
 }
