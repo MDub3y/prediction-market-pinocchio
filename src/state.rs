@@ -102,8 +102,12 @@ pub struct OrderNode {
 #[derive(Clone, Default)]
 pub struct TraderSeat {
     pub wallet: Address,
+    pub collateral_locked: u64,
+    pub ot_a_locked: u64,
+    pub ot_b_locked: u64,
     pub collateral_claimable: u64,
-    pub shares_claimable: u64,
+    pub ot_a_claimable: u64,
+    pub ot_b_claimable: u64,
 }
 
 #[repr(C)]
