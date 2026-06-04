@@ -280,3 +280,18 @@ impl CancelOrderArgs {
         })
     }
 }
+
+#[repr(C)]
+pub struct ClaimFundsArgs {
+    pub outcome: u8,
+}
+
+impl ClaimFundsArgs {
+    pub const LEN: usize = 1;
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        Ok(Self { outcome: bytes[0] })
+    }
+}

@@ -37,6 +37,7 @@ pub fn process_instruction(
         3 => instructions::place_order::process_place_order(program_id, accounts, rest),
         _ => Err(ProgramError::InvalidInstructionData),
         4 => instructions::cancel_order::process_cancel_order(program_id, accounts, rest),
+        5 => instructions::claim_funds::process_claim_funds(program_id, accounts, rest),
         _ => Err(ProgramError::InvalidInstructionData),
         _ => Err(ProgramError::InvalidInstructionData),
     };
