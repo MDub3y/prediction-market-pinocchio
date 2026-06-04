@@ -20,7 +20,7 @@ pub fn process_initialize_orderbooks(
         market_pda,
         orderbook_a,
         orderbook_b,
-        system_program,
+        _system_program,
         ..,
     ] = accounts
     else {
@@ -28,7 +28,6 @@ pub fn process_initialize_orderbooks(
     };
 
     let args = InitializeOrderBookArgs::from_bytes(instruction_data)?;
-
     if !creator.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
     }
@@ -36,7 +35,7 @@ pub fn process_initialize_orderbooks(
     let tier = unsafe {
         let data = market_pda.borrow_unchecked();
         let state = MarketState::from_bytes(&data)?;
-        MarketTier::from_u8(state.size_params.tier_flag)?
+        MarketTier::from_u8(state.tier)?
     };
 
     let required_space = calculate_orderbook_space(tier);
@@ -57,7 +56,6 @@ pub fn process_initialize_orderbooks(
         return Err(ProgramError::InvalidSeeds);
     }
 
-    // allocate space
     let signer_a_seeds = [
         Seed::from(b"orderbook_a"),
         Seed::from(market_pda.address().as_ref()),
@@ -104,18 +102,18 @@ pub fn process_initialize_orderbooks(
             core::ptr::write_bytes(dir_ptr, 0, 200);
 
             let max_orders = match tier {
-                MarketTier::Small => crate::state::SMALL_ORDERS * 2,
-                MarketTier::Medium => crate::state::MEDIUM_ORDERS * 2,
-                MarketTier::Large => crate::state::LARGE_ORDERS * 2,
+                MarketTier::Small => crate::state::SMALL_ORDERS,
+                MarketTier::Medium => crate::state::MEDIUM_ORDERS,
+                MarketTier::Large => crate::state::LARGE_ORDERS,
             };
 
-            let offset_seats = offset_dir + (core::mem::size_of::<PriceLevel>() * 200);
             let max_seats = match tier {
                 MarketTier::Small => crate::state::SMALL_SEATS,
                 MarketTier::Medium => crate::state::MEDIUM_SEATS,
                 MarketTier::Large => crate::state::LARGE_SEATS,
             };
 
+            let offset_seats = offset_dir + (core::mem::size_of::<PriceLevel>() * 200);
             let offset_orders = offset_seats + (core::mem::size_of::<TraderSeat>() * max_seats);
             let orders_ptr = data.as_mut_ptr().add(offset_orders) as *mut OrderNode;
 
@@ -123,7 +121,7 @@ pub fn process_initialize_orderbooks(
                 let node = &mut *orders_ptr.add(i);
                 node.next_idx = (i + 1) as u32;
             }
-            (*orders_ptr.add(max_orders - 1)).next_idx = 0;
+            (*orders_ptr.add(max_orders - 1)).next_idx = 0; // Terminate linked free pool
         }
     }
 
