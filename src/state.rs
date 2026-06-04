@@ -255,3 +255,28 @@ impl PlaceOrderArgs {
         })
     }
 }
+
+#[repr(C)]
+pub struct CancelOrderArgs {
+    pub outcome: u8,
+    pub side: u8,
+    pub price: u8,
+    pub order_node_idx: u32,
+    pub order_id: u64,
+}
+
+impl CancelOrderArgs {
+    pub const LEN: usize = 15;
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        Ok(Self {
+            outcome: bytes[0],
+            side: bytes[1],
+            price: bytes[2],
+            order_node_idx: u32::from_le_bytes(bytes[3..7].try_into().unwrap()),
+            order_id: u64::from_le_bytes(bytes[7..15].try_into().unwrap()),
+        })
+    }
+}
