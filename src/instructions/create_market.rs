@@ -7,10 +7,7 @@ use pinocchio_associated_token_account::instructions::Create as CreateAssociated
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::InitializeMint2;
 
-use crate::state::{
-    CreateMarketArgs, LARGE_ORDERS, LARGE_SEATS, MEDIUM_ORDERS, MEDIUM_SEATS, MarketSizeParams,
-    MarketState, MarketTier, SMALL_ORDERS, SMALL_SEATS,
-};
+use crate::state::{CreateMarketArgs, MarketState, MarketTier};
 
 pub fn process_create_market(
     program_id: &Address,
@@ -38,7 +35,7 @@ pub fn process_create_market(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    let tier = MarketTier::from_u8(args.tier)?;
+    let _tier = MarketTier::from_u8(args.tier)?;
 
     let market_id_bytes = args.market_id.to_le_bytes();
     let (expected_market_pda, market_bump) =
@@ -116,7 +113,7 @@ pub fn process_create_market(
         space: MarketState::LEN as u64,
         owner: program_id,
     }
-    .invoke_signed(&[state_signer]);
+    .invoke_signed(&[state_signer])?;
 
     CreateAccount {
         from: creator,
@@ -148,30 +145,6 @@ pub fn process_create_market(
     }
     .invoke()?;
 
-    let size_params = match tier {
-        MarketTier::Small => MarketSizeParams {
-            max_bids: SMALL_ORDERS as u32,
-            max_asks: SMALL_ORDERS as u32,
-            max_seats: SMALL_SEATS as u32,
-            tier_flag: 0,
-            padding: [0; 3],
-        },
-        MarketTier::Medium => MarketSizeParams {
-            max_bids: MEDIUM_ORDERS as u32,
-            max_asks: MEDIUM_ORDERS as u32,
-            max_seats: MEDIUM_SEATS as u32,
-            tier_flag: 1,
-            padding: [0; 3],
-        },
-        MarketTier::Large => MarketSizeParams {
-            max_bids: LARGE_ORDERS as u32,
-            max_asks: LARGE_ORDERS as u32,
-            max_seats: LARGE_SEATS as u32,
-            tier_flag: 2,
-            padding: [0; 3],
-        },
-    };
-
     unsafe {
         let mut data_slice = market_pda.borrow_unchecked_mut();
         let state_mut = &mut *(data_slice.as_mut_ptr() as *mut MarketState);
@@ -185,7 +158,7 @@ pub fn process_create_market(
         state_mut.orderbook_a = Address::default();
         state_mut.orderbook_b = Address::default();
         state_mut.accumulated_fees = 0;
-        state_mut.size_params = size_params;
+        state_mut.tier = args.tier;
         state_mut.is_settled = 0;
         state_mut.market_status = 0;
         state_mut.bump = market_bump;

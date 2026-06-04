@@ -37,7 +37,7 @@ pub struct MarketState {
 }
 
 impl MarketState {
-    pub const LEN: usize = 268;
+    pub const LEN: usize = 252;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
         if bytes.len() < Self::LEN {
@@ -103,13 +103,13 @@ pub struct OrderBookHeader {
 }
 
 pub const SMALL_SEATS: usize = 128;
-pub const SMALL_ORDERS: usize = 256;
+pub const SMALL_ORDERS: usize = 512;
 
 pub const MEDIUM_SEATS: usize = 1024;
-pub const MEDIUM_ORDERS: usize = 2048;
+pub const MEDIUM_ORDERS: usize = 4096;
 
 pub const LARGE_SEATS: usize = 4096;
-pub const LARGE_ORDERS: usize = 8192;
+pub const LARGE_ORDERS: usize = 16384;
 
 pub fn calculate_orderbook_space(tier: MarketTier) -> usize {
     let header_size = core::mem::size_of::<OrderBookHeader>();
@@ -177,22 +177,16 @@ pub struct CreateMarketArgs {
 
 impl CreateMarketArgs {
     pub const LEN: usize = 19;
-
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
         }
-        let market_id = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-        let settlement_deadline = i64::from_le_bytes(bytes[8..16].try_into().unwrap());
-        let bump_ot_a = bytes[16];
-        let bump_ot_b = bytes[17];
-        let tier = bytes[18];
         Ok(Self {
-            market_id,
-            settlement_deadline,
-            bump_ot_a,
-            bump_ot_b,
-            tier,
+            market_id: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+            settlement_deadline: i64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            bump_ot_a: bytes[16],
+            bump_ot_b: bytes[17],
+            tier: bytes[18],
         })
     }
 }
@@ -205,7 +199,6 @@ pub struct InitializeOrderBookArgs {
 
 impl InitializeOrderBookArgs {
     pub const LEN: usize = 2;
-
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
@@ -220,21 +213,18 @@ impl InitializeOrderBookArgs {
 #[repr(C)]
 pub struct DepositCollateralArgs {
     pub amount: u64,
-    pub bump_user_position: u8,
+    pub bump_user_state: u8,
 }
 
 impl DepositCollateralArgs {
     pub const LEN: usize = 9;
-
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
         }
-        let amount = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-        let bump_user_position = bytes[8];
         Ok(Self {
-            amount,
-            bump_user_position,
+            amount: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+            bump_user_state: bytes[8],
         })
     }
 }
