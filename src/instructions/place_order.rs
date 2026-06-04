@@ -11,7 +11,7 @@ pub fn process_place_order(
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let [user, market_pda, user_market_position, monolithic_book, ..] = accounts else {
+    let [user, market_pda, user_market_position, orderbook, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -28,11 +28,11 @@ pub fn process_place_order(
         let data = market_pda.borrow_unchecked();
         let state = MarketState::from_bytes(&data)?;
         if args.outcome == 0 {
-            if state.orderbook_a != *monolithic_book.address() {
+            if state.orderbook_a != *orderbook.address() {
                 return Err(ProgramError::InvalidArgument);
             }
         } else {
-            if state.orderbook_b != *monolithic_book.address() {
+            if state.orderbook_b != *orderbook.address() {
                 return Err(ProgramError::InvalidArgument);
             }
         }
@@ -56,7 +56,7 @@ pub fn process_place_order(
     let offset_orders = offset_seats + (core::mem::size_of::<TraderSeat>() * max_seats);
 
     unsafe {
-        let mut book_data = monolithic_book.borrow_unchecked_mut();
+        let mut book_data = orderbook.borrow_unchecked_mut();
         let book_ptr = book_data.as_mut_ptr();
 
         let header = &mut *(book_ptr as *mut OrderBookHeader);
@@ -70,7 +70,6 @@ pub fn process_place_order(
             book_ptr.add(offset_seats) as *mut TraderSeat,
             max_seats,
         );
-
         let orders_slice = core::slice::from_raw_parts_mut(
             book_ptr.add(offset_orders) as *mut OrderNode,
             max_orders,
@@ -100,6 +99,7 @@ pub fn process_place_order(
         let directory_index = (args.side as usize * 100) + args.price as usize;
 
         if args.order_type == 0 {
+            // limit order
             let free_idx = header.next_free_node_idx;
             if free_idx == 0 {
                 return Err(ProgramError::Custom(203));
@@ -148,6 +148,7 @@ pub fn process_place_order(
                 level.tail = free_idx;
             }
         } else {
+            // market order
             let counter_side = if args.side == 0 { 1 } else { 0 };
             let target_dir_index = (counter_side * 100) + args.price as usize;
 
@@ -157,7 +158,7 @@ pub fn process_place_order(
             let mut market_state_data = market_pda.borrow_unchecked_mut();
             let market_mut = &mut *(market_state_data.as_mut_ptr() as *mut MarketState);
 
-            let mut taker_pos_data = user_market_position.borrow_unchecked_mut();
+            let taker_pos_data = user_market_position.borrow_unchecked_mut();
             let taker_pos_mut = &mut *(taker_pos_data.as_mut_ptr() as *mut UserMarketPosition);
 
             while taker_remaining > 0 && level.head != 0 {
@@ -175,10 +176,12 @@ pub fn process_place_order(
                 let net_collateral = trade_collateral - fee;
 
                 if args.side == 0 {
+                    // taker buying vs maker resting seller
                     if taker_pos_mut.collateral_available < trade_collateral {
                         return Err(ProgramError::InsufficientFunds);
                     }
                     maker_seat.collateral_claimable += net_collateral;
+
                     taker_pos_mut.collateral_available -= trade_collateral;
                     if args.outcome == 0 {
                         taker_pos_mut.ot_a_available += match_qty;
@@ -186,6 +189,7 @@ pub fn process_place_order(
                         taker_pos_mut.ot_b_available += match_qty;
                     }
                 } else {
+                    // taker selling vs maker resting buyer
                     if args.outcome == 0 {
                         if taker_pos_mut.ot_a_available < match_qty {
                             return Err(ProgramError::InsufficientFunds);
@@ -197,6 +201,7 @@ pub fn process_place_order(
                         }
                         taker_pos_mut.ot_b_available -= match_qty;
                     }
+
                     maker_seat.shares_claimable += match_qty;
                     taker_pos_mut.collateral_available += net_collateral;
                 }
@@ -218,10 +223,9 @@ pub fn process_place_order(
             }
 
             if taker_remaining > 0 {
-                return Err(ProgramError::InvalidArgument);
+                return Err(ProgramError::InvalidArgument); // saturated book depth limits
             }
         }
     }
-
     Ok(())
 }
