@@ -23,11 +23,7 @@ pub fn process_instruction(
         .ok_or(ProgramError::InvalidInstructionData)?;
 
     match discriminator {
-        0 => instructions::create_market::process_create_market(
-            program_id,
-            accounts,
-            instruction_data,
-        ),
+        0 => instructions::create_market::process_create_market(program_id, accounts, rest),
         1 => instructions::initialize_orderbooks::process_initialize_orderbooks(
             program_id, accounts, rest,
         ),
@@ -40,7 +36,5 @@ pub fn process_instruction(
         5 => instructions::claim_funds::process_claim_funds(program_id, accounts, rest),
         _ => Err(ProgramError::InvalidInstructionData),
         _ => Err(ProgramError::InvalidInstructionData),
-    };
-
-    Ok(())
+    }
 }
