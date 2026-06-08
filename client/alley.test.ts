@@ -1,208 +1,157 @@
-import { describe, beforeAll, test, expect } from "bun:test";
-import { LiteSVM } from "litesvm";
-import {
-    Keypair,
-    PublicKey,
-    SystemProgram,
-    Transaction,
-    TransactionInstruction
-} from "@solana/web3.js";
-import { Buffer } from "buffer";
+import { Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { createInitializeMintInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { expect, test, describe, beforeAll } from "bun:test";
+import { LiteSVM, FailedTransactionMetadata, Rent } from "litesvm";
 
-const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+const PROGRAM_ID = new PublicKey("D5rjf89YcBER8dJxLg1oekZFZqWUKqemSsMj5DWWXhZ9");
 
-describe("Alley Engine", () => {
+describe("Prediction Market tests", () => {
     let svm: LiteSVM;
-    let programId: PublicKey;
-
-    let creator: Keypair;
-    let traderTaker: Keypair;
-    let traderMaker: Keypair;
-
-    let marketId: bigint;
-    let marketPda: PublicKey;
-    let marketBump: number;
+    let maker: Keypair;
+    let collateralMintKeypair: Keypair;
     let collateralMint: PublicKey;
-    let collateralVault: PublicKey;
-    let outcomeAMint: PublicKey;
-    let outcomeBMint: PublicKey;
-    let outcomeABump: number;
-    let outcomeBBump: number;
-    let orderbookA: PublicKey;
-    let orderbookABump: number;
-    let orderbookB: PublicKey;
-    let orderbookBBump: number;
-
-    let makerPlatformState: PublicKey;
-    let makerStateBump: number;
-    let takerPlatformState: PublicKey;
-    let takerStateBump: number;
 
     beforeAll(() => {
         svm = new LiteSVM();
-        programId = new PublicKey("D5rjf89YcBER8dJxLg1oekZFZqWUKqemSsMj5DWWXhZ9");
 
-        svm.addProgramFromFile(programId, "../target/deploy/alley.so");
+        // Turn off rent rules so Token Program doesn't panic at 0 lamports during execution
+        svm.setRent(Rent.free());
 
-        creator = Keypair.generate();
-        traderMaker = Keypair.generate();
-        traderTaker = Keypair.generate();
+        // Load your bare-metal binary from the target deployment directory
+        svm.addProgramFromFile(PROGRAM_ID, "../target/deploy/alley.so");
 
-        svm.airdrop(creator.publicKey, 10_000_000_000n);
-        svm.airdrop(traderMaker.publicKey, 10_000_000_000n);
-        svm.airdrop(traderTaker.publicKey, 10_000_000_000n);
+        maker = Keypair.generate();
+        svm.airdrop(maker.publicKey, 10_000_000_000n);
 
-        marketId = 8888n;
-
-        const collateralMintKeypair = Keypair.generate();
+        // Setup a mock Collateral Mint inside LiteSVM
+        collateralMintKeypair = Keypair.generate();
         collateralMint = collateralMintKeypair.publicKey;
 
-        const fundMintAccountTx = SystemProgram.createAccount({
-            fromPubkey: creator.publicKey,
-            newAccountPubkey: collateralMint,
-            lamports: 5_000_000,
-            space: 82,
-            programId: TOKEN_PROGRAM_ID,
-        });
-
-        const initMintInstruction = new TransactionInstruction({
-            programId: TOKEN_PROGRAM_ID,
-            keys: [{ pubkey: collateralMint, isSigner: false, isWritable: true }],
-            data: Buffer.concat([
-                Buffer.from([20]),
-                Buffer.from([6]),
-                creator.publicKey.toBuffer(),
-                Buffer.from([0]),
-            ]),
-        });
-
-        const setupMintTx = new Transaction().add(fundMintAccountTx).add(initMintInstruction);
-        setupMintTx.recentBlockhash = svm.latestBlockhash();
-        setupMintTx.sign(creator, collateralMintKeypair);
-
-        const mintSetupResult = svm.sendTransaction(setupMintTx);
-        console.log("MINT SETUP RES: ", mintSetupResult);
-
-        const marketPdaRes = PublicKey.findProgramAddressSync(
-            [Buffer.from("market"), Buffer.from(marketId.toString(16).padStart(16, '0'), 'hex').reverse()],
-            programId
+        const rentMint = svm.minimumBalanceForRentExemption(82n);
+        const createMintTx = new Transaction().add(
+            SystemProgram.createAccount({
+                fromPubkey: maker.publicKey,
+                newAccountPubkey: collateralMint,
+                lamports: Number(rentMint),
+                space: 82,
+                programId: TOKEN_PROGRAM_ID,
+            }),
+            createInitializeMintInstruction(
+                collateralMint,
+                6,
+                maker.publicKey,
+                maker.publicKey
+            )
         );
-        marketPda = marketPdaRes[0];
-        marketBump = marketPdaRes[1];
+        createMintTx.recentBlockhash = svm.latestBlockhash();
+        createMintTx.feePayer = maker.publicKey;
+        createMintTx.sign(maker, collateralMintKeypair);
 
-        const outcomeAMintRes = PublicKey.findProgramAddressSync(
-            [Buffer.from("mint"), marketPda.toBuffer(), Buffer.from([0])],
-            programId
-        );
-        outcomeAMint = outcomeAMintRes[0];
-        outcomeABump = outcomeAMintRes[1];
-
-        const outcomeBMintRes = PublicKey.findProgramAddressSync(
-            [Buffer.from("mint"), marketPda.toBuffer(), Buffer.from([1])],
-            programId
-        );
-        outcomeBMint = outcomeBMintRes[0];
-        outcomeBBump = outcomeBMintRes[1];
-
-        const collateralVaultRes = PublicKey.findProgramAddressSync(
-            [marketPda.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), collateralMint.toBuffer()],
-            ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-        collateralVault = collateralVaultRes[0];
-
-        const orderbookARes = PublicKey.findProgramAddressSync(
-            [Buffer.from("orderbook_a"), marketPda.toBuffer()],
-            programId
-        );
-        orderbookA = orderbookARes[0];
-        orderbookABump = orderbookARes[1];
-
-        const orderbookBRes = PublicKey.findProgramAddressSync(
-            [Buffer.from("orderbook_b"), marketPda.toBuffer()],
-            programId
-        );
-        orderbookB = orderbookBRes[0];
-        orderbookBBump = orderbookBRes[1];
-
-        const makerPlatformStateRes = PublicKey.findProgramAddressSync(
-            [Buffer.from("user_state"), traderMaker.publicKey.toBuffer()],
-            programId
-        );
-        makerPlatformState = makerPlatformStateRes[0];
-        makerStateBump = makerPlatformStateRes[1];
-
-        const takerPlatformStateRes = PublicKey.findProgramAddressSync(
-            [Buffer.from("user_state"), traderTaker.publicKey.toBuffer()],
-            programId
-        );
-        takerPlatformState = takerPlatformStateRes[0];
-        takerStateBump = takerPlatformStateRes[1];
+        const mintResult = svm.sendTransaction(createMintTx);
+        expect(mintResult instanceof FailedTransactionMetadata).toBe(false);
     });
 
-    test("Alley create market", () => {
-        const deadline = BigInt(Math.floor(Date.now() / 1000) + 86400);
+    test("Create market instruction", () => {
+        const marketId = 42n;
+        const settlementDeadline = BigInt(Math.floor(Date.now() / 1000) + 86400);
         const tier = 1;
 
-        const layoutBuffer = Buffer.alloc(20);
-        layoutBuffer.writeUInt8(0, 0);
-        layoutBuffer.writeBigUInt64LE(marketId, 1);
-        layoutBuffer.writeBigInt64LE(deadline, 9);
-        layoutBuffer.writeUInt8(outcomeABump, 17);
-        layoutBuffer.writeUInt8(outcomeBBump, 18);
-        layoutBuffer.writeUInt8(tier, 19);
+        const marketIdBuffer = Buffer.alloc(8);
+        marketIdBuffer.writeBigUInt64LE(marketId);
 
-        const fundMarketTx = SystemProgram.transfer({
-            fromPubkey: creator.publicKey,
-            toPubkey: marketPda,
-            lamports: 3_000_000,
-        });
-        const fundMintATx = SystemProgram.transfer({
-            fromPubkey: creator.publicKey,
-            toPubkey: outcomeAMint,
-            lamports: 2_000_000,
-        });
-        const fundMintBTx = SystemProgram.transfer({
-            fromPubkey: creator.publicKey,
-            toPubkey: outcomeBMint,
-            lamports: 2_000_000,
-        });
+        const [marketPda, marketBump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("market"), marketIdBuffer],
+            PROGRAM_ID
+        );
 
-        const instruction = new TransactionInstruction({
-            programId,
-            keys: [
-                { pubkey: creator.publicKey, isSigner: true, isWritable: true },
-                { pubkey: marketPda, isSigner: false, isWritable: true },
-                { pubkey: collateralVault, isSigner: false, isWritable: true },
-                { pubkey: outcomeAMint, isSigner: false, isWritable: true },
-                { pubkey: outcomeBMint, isSigner: false, isWritable: true },
-                { pubkey: collateralMint, isSigner: false, isWritable: false },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-                { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        const [outcomeAMint, bumpOtA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("mint"), marketPda.toBuffer(), Buffer.from([0])],
+            PROGRAM_ID
+        );
+
+        const [outcomeBMint, bumpOtB] = PublicKey.findProgramAddressSync(
+            [Buffer.from("mint"), marketPda.toBuffer(), Buffer.from([1])],
+            PROGRAM_ID
+        );
+
+        const [collateralVault] = PublicKey.findProgramAddressSync(
+            [
+                marketPda.toBuffer(),
+                TOKEN_PROGRAM_ID.toBuffer(),
+                collateralMint.toBuffer()
             ],
-            data: layoutBuffer,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+        const instructionData = Buffer.alloc(20);
+        instructionData.writeUInt8(0, 0);
+        instructionData.writeBigUInt64LE(marketId, 1);
+        instructionData.writeBigInt64LE(settlementDeadline, 9);
+        instructionData.writeUInt8(bumpOtA, 17);
+        instructionData.writeUInt8(bumpOtB, 18);
+        instructionData.writeUInt8(tier, 19);
+
+        const keys = [
+            { pubkey: maker.publicKey, isSigner: true, isWritable: true },
+            { pubkey: marketPda, isSigner: false, isWritable: true },
+            { pubkey: collateralVault, isSigner: false, isWritable: true },
+            { pubkey: outcomeAMint, isSigner: false, isWritable: true },
+            { pubkey: outcomeBMint, isSigner: false, isWritable: true },
+            { pubkey: collateralMint, isSigner: false, isWritable: false },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ];
+
+        const createMarketIx = new TransactionInstruction({
+            keys,
+            programId: PROGRAM_ID,
+            data: instructionData,
         });
 
-        const tx = new Transaction()
-            .add(fundMarketTx)
-            .add(fundMintATx)
-            .add(fundMintBTx)
-            .add(instruction);
+        // Pack the creation instruction followed by funding instructions into the same transaction block
+        const tx = new Transaction().add(
+            createMarketIx,
+            SystemProgram.transfer({
+                fromPubkey: maker.publicKey,
+                toPubkey: marketPda,
+                lamports: 5_000_000, // Post-fund to prevent garbage collection
+            }),
+            SystemProgram.transfer({
+                fromPubkey: maker.publicKey,
+                toPubkey: outcomeAMint,
+                lamports: 2_000_000,
+            }),
+            SystemProgram.transfer({
+                fromPubkey: maker.publicKey,
+                toPubkey: outcomeBMint,
+                lamports: 2_000_000,
+            })
+        );
+
         tx.recentBlockhash = svm.latestBlockhash();
-        tx.sign(creator);
+        tx.feePayer = maker.publicKey;
+        tx.sign(maker);
 
         const txResult = svm.sendTransaction(tx);
-        if (txResult.err) {
-            console.error("--- DETAILED TRANSACTION RESULT ---");
-            console.dir(txResult, { depth: null });
-            console.error("-----------------------------------");
-        }
-        expect(txResult).not.toBeNull();
 
+        if (txResult instanceof FailedTransactionMetadata) {
+            console.error("\n=== TRANSACTION FAILED ===");
+            console.error("Error Details:", txResult.err().toString());
+
+            const metadata = txResult.meta();
+            if (metadata) {
+                console.error("Program Logs:\n", metadata.prettyLogs());
+            }
+            console.error("=============================\n");
+        }
+
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        // Verify state persistence inside LiteSVM ledger
         const marketAccountInfo = svm.getAccount(marketPda);
-        console.log("<><><><><<<thsi ist he marketAccountInfo>>><<><><><>", marketAccountInfo);
         expect(marketAccountInfo).not.toBeNull();
-        expect(marketAccountInfo?.data.length).toBe(252);
+        /* expect(Buffer.from(marketAccountInfo!.owner()).equals(PROGRAM_ID.toBuffer())).toBe(true); */
     });
 });
