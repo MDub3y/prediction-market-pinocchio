@@ -135,7 +135,7 @@ pub struct OrderBookView<'a> {
 }
 
 impl<'a> OrderBookView<'a> {
-    pub unsafe fn load(ptr: *mut u8, tier: MarketTier) -> Self {
+    pub unsafe fn load(ptr: *mut u8, tier: MarketTier) -> Self { unsafe {
         let max_seats = match tier {
             MarketTier::Small => SMALL_SEATS,
             MarketTier::Medium => MEDIUM_SEATS,
@@ -163,7 +163,7 @@ impl<'a> OrderBookView<'a> {
                 max_orders,
             ),
         }
-    }
+    }}
 }
 
 #[repr(C)]

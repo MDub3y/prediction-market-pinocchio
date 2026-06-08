@@ -89,7 +89,7 @@ pub fn process_initialize_orderbooks(
         .zip([&mut *orderbook_a, &mut *orderbook_b])
     {
         unsafe {
-            let mut data = book_account.borrow_unchecked_mut();
+            let data = book_account.borrow_unchecked_mut();
 
             let header = &mut *(data.as_mut_ptr() as *mut OrderBookHeader);
             header.market_state_pda = market_pda.address().clone();
@@ -126,7 +126,7 @@ pub fn process_initialize_orderbooks(
     }
 
     unsafe {
-        let mut data_slice = market_pda.borrow_unchecked_mut();
+        let data_slice = market_pda.borrow_unchecked_mut();
         let state_mut = &mut *(data_slice.as_mut_ptr() as *mut MarketState);
         state_mut.orderbook_a = orderbook_a.address().clone();
         state_mut.orderbook_b = orderbook_b.address().clone();

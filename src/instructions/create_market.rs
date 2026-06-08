@@ -23,7 +23,7 @@ pub fn process_create_market(
         collateral_mint,
         system_program,
         token_program,
-        associated_token_program,
+        _associated_token_program,
         ..,
     ] = accounts
     else {
@@ -146,7 +146,7 @@ pub fn process_create_market(
     .invoke()?;
 
     unsafe {
-        let mut data_slice = market_pda.borrow_unchecked_mut();
+        let data_slice = market_pda.borrow_unchecked_mut();
         let state_mut = &mut *(data_slice.as_mut_ptr() as *mut MarketState);
         state_mut.creator = creator.address().clone();
         state_mut.market_id = args.market_id;

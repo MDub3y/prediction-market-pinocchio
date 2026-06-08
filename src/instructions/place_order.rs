@@ -1,12 +1,12 @@
 use crate::state::{
-    MarketState, MarketTier, OrderBookView, PlaceOrderArgs, PlatformUserState, TraderSeat,
+    MarketState, MarketTier, OrderBookView, PlaceOrderArgs, PlatformUserState,
 };
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 const FEE_BASIS_POINTS: u64 = 20;
 
 pub fn process_place_order(
-    program_id: &Address,
+    _program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
@@ -39,8 +39,8 @@ pub fn process_place_order(
     };
 
     unsafe {
-        let mut book_data = orderbook.borrow_unchecked_mut();
-        let mut view = OrderBookView::load(book_data.as_mut_ptr(), tier);
+        let book_data = orderbook.borrow_unchecked_mut();
+        let view = OrderBookView::load(book_data.as_mut_ptr(), tier);
 
         if view.header.market_state_pda != *market_pda.address() {
             return Err(ProgramError::InvalidArgument);
@@ -94,7 +94,7 @@ pub fn process_place_order(
                 return Err(ProgramError::Custom(203));
             }
 
-            let mut user_data = platform_user_state.borrow_unchecked_mut();
+            let user_data = platform_user_state.borrow_unchecked_mut();
             let user_mut = &mut *(user_data.as_mut_ptr() as *mut PlatformUserState);
 
             let maker_seat = &mut *seats_ptr.add(active_seat_idx as usize);
@@ -145,10 +145,10 @@ pub fn process_place_order(
             let mut taker_remaining = args.quantity;
             let level = &mut view.directory[target_dir_index];
 
-            let mut market_state_data = market_pda.borrow_unchecked_mut();
+            let market_state_data = market_pda.borrow_unchecked_mut();
             let market_mut = &mut *(market_state_data.as_mut_ptr() as *mut MarketState);
 
-            let mut taker_data = platform_user_state.borrow_unchecked_mut();
+            let taker_data = platform_user_state.borrow_unchecked_mut();
             let taker_mut = &mut *(taker_data.as_mut_ptr() as *mut PlatformUserState);
 
             while taker_remaining > 0 && level.head != 0 {

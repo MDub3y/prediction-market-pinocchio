@@ -2,7 +2,7 @@ use crate::state::{ClaimFundsArgs, MarketState, MarketTier, OrderBookView, Platf
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 pub fn process_claim_funds(
-    program_id: &Address,
+    _program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
@@ -31,8 +31,8 @@ pub fn process_claim_funds(
     };
 
     unsafe {
-        let mut book_data = orderbook.borrow_unchecked_mut();
-        let mut view = OrderBookView::load(book_data.as_mut_ptr(), tier);
+        let book_data = orderbook.borrow_unchecked_mut();
+        let view = OrderBookView::load(book_data.as_mut_ptr(), tier);
 
         let mut seat_idx: Option<usize> = None;
         for i in 0..(view.header.total_allocated_seats as usize) {
@@ -45,7 +45,7 @@ pub fn process_claim_funds(
         let s_idx = seat_idx.ok_or(ProgramError::InvalidArgument)?;
         let seat = &mut view.seats[s_idx];
 
-        let mut user_data = platform_user_state.borrow_unchecked_mut();
+        let user_data = platform_user_state.borrow_unchecked_mut();
         let user_mut = &mut *(user_data.as_mut_ptr() as *mut PlatformUserState);
 
         if seat.collateral_claimable > 0 {

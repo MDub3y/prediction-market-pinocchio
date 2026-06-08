@@ -12,7 +12,7 @@ import { Buffer } from "buffer";
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
-describe("Alley Core Protocol Integration Engine", () => {
+describe("Alley Engine", () => {
     let svm: LiteSVM;
     let programId: PublicKey;
 
@@ -54,7 +54,35 @@ describe("Alley Core Protocol Integration Engine", () => {
         svm.airdrop(traderTaker.publicKey, 10_000_000_000n);
 
         marketId = 8888n;
-        collateralMint = Keypair.generate().publicKey;
+
+        const collateralMintKeypair = Keypair.generate();
+        collateralMint = collateralMintKeypair.publicKey;
+
+        const fundMintAccountTx = SystemProgram.createAccount({
+            fromPubkey: creator.publicKey,
+            newAccountPubkey: collateralMint,
+            lamports: 5_000_000,
+            space: 82,
+            programId: TOKEN_PROGRAM_ID,
+        });
+
+        const initMintInstruction = new TransactionInstruction({
+            programId: TOKEN_PROGRAM_ID,
+            keys: [{ pubkey: collateralMint, isSigner: false, isWritable: true }],
+            data: Buffer.concat([
+                Buffer.from([20]),
+                Buffer.from([6]),
+                creator.publicKey.toBuffer(),
+                Buffer.from([0]),
+            ]),
+        });
+
+        const setupMintTx = new Transaction().add(fundMintAccountTx).add(initMintInstruction);
+        setupMintTx.recentBlockhash = svm.latestBlockhash();
+        setupMintTx.sign(creator, collateralMintKeypair);
+
+        const mintSetupResult = svm.sendTransaction(setupMintTx);
+        console.log("MINT SETUP RES: ", mintSetupResult);
 
         const marketPdaRes = PublicKey.findProgramAddressSync(
             [Buffer.from("market"), Buffer.from(marketId.toString(16).padStart(16, '0'), 'hex').reverse()],
@@ -165,9 +193,15 @@ describe("Alley Core Protocol Integration Engine", () => {
         tx.sign(creator);
 
         const txResult = svm.sendTransaction(tx);
+        if (txResult.err) {
+            console.error("--- DETAILED TRANSACTION RESULT ---");
+            console.dir(txResult, { depth: null });
+            console.error("-----------------------------------");
+        }
         expect(txResult).not.toBeNull();
 
         const marketAccountInfo = svm.getAccount(marketPda);
+        console.log("<><><><><<<thsi ist he marketAccountInfo>>><<><><><>", marketAccountInfo);
         expect(marketAccountInfo).not.toBeNull();
         expect(marketAccountInfo?.data.length).toBe(252);
     });

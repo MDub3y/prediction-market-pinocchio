@@ -61,7 +61,7 @@ pub fn process_deposit_collateral(
         .invoke_signed(&[Signer::from(&state_signer_seeds)])?;
 
         unsafe {
-            let mut data_slice = platform_user_state.borrow_unchecked_mut();
+            let data_slice = platform_user_state.borrow_unchecked_mut();
             let pos_mut = &mut *(data_slice.as_mut_ptr() as *mut PlatformUserState);
             pos_mut.wallet = user.address().clone();
             pos_mut.collateral_available = 0;
@@ -72,7 +72,7 @@ pub fn process_deposit_collateral(
     Transfer::new(user_token_account, collateral_vault, user, args.amount).invoke()?;
 
     unsafe {
-        let mut data_slice = platform_user_state.borrow_unchecked_mut();
+        let data_slice = platform_user_state.borrow_unchecked_mut();
         let pos_mut = &mut *(data_slice.as_mut_ptr() as *mut PlatformUserState);
         pos_mut.collateral_available += args.amount;
     }
