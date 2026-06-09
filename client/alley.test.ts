@@ -159,5 +159,16 @@ describe("Prediction Market tests", () => {
         expect(marketAccountInfo).not.toBeNull();
         console.log("MarketAccountInfo: ", marketAccountInfo);
         expect(marketAccountInfo?.owner.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
+
+        const vaultAccountInfo = svm.getAccount(collateralVault);
+        expect(vaultAccountInfo).not.toBeNull();
+
+        expect(vaultAccountInfo!.owner.toBuffer().equals(TOKEN_PROGRAM_ID.toBuffer())).toBe(true);
+
+        const vaultData = vaultAccountInfo!.data;
+        const tokenAuthorityBytes = vaultData.slice(32, 64); // Bytes 32 to 64 represent the token account owner field
+
+        expect(Buffer.from(tokenAuthorityBytes).equals(marketPda.toBuffer())).toBe(true);
+        console.log("✅ Verified: The collateral vault internal authority is strictly market_pda.");
     });
 });
