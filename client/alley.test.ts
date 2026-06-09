@@ -152,6 +152,7 @@ describe("Prediction Market tests", () => {
         // Verify state persistence inside LiteSVM ledger
         const marketAccountInfo = svm.getAccount(marketPda);
         expect(marketAccountInfo).not.toBeNull();
-        /* expect(Buffer.from(marketAccountInfo!.owner()).equals(PROGRAM_ID.toBuffer())).toBe(true); */
+        console.log("MarketAccountInfo: ", marketAccountInfo);
+        expect(marketAccountInfo?.owner.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
     });
 });
