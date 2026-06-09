@@ -116,7 +116,7 @@ describe("Prediction Market tests", () => {
             SystemProgram.transfer({
                 fromPubkey: maker.publicKey,
                 toPubkey: marketPda,
-                lamports: 5_000_000, // Post-fund to prevent garbage collection
+                lamports: 5_000_000,
             }),
             SystemProgram.transfer({
                 fromPubkey: maker.publicKey,
@@ -126,6 +126,11 @@ describe("Prediction Market tests", () => {
             SystemProgram.transfer({
                 fromPubkey: maker.publicKey,
                 toPubkey: outcomeBMint,
+                lamports: 2_000_000,
+            }),
+            SystemProgram.transfer({
+                fromPubkey: maker.publicKey,
+                toPubkey: collateralVault,
                 lamports: 2_000_000,
             })
         );
