@@ -11,6 +11,8 @@ describe("Prediction Market tests", () => {
     let maker: Keypair;
     let collateralMintKeypair: Keypair;
     let collateralMint: PublicKey;
+    let marketId: bigint;
+    let market_pda: PublicKey;
 
     beforeAll(() => {
         svm = new LiteSVM();
@@ -53,7 +55,7 @@ describe("Prediction Market tests", () => {
     });
 
     test("Create market instruction", () => {
-        const marketId = 42n;
+        marketId = 42n;
         const settlementDeadline = BigInt(Math.floor(Date.now() / 1000) + 86400);
         const tier = 1;
 
@@ -64,6 +66,7 @@ describe("Prediction Market tests", () => {
             [Buffer.from("market"), marketIdBuffer],
             PROGRAM_ID
         );
+        market_pda = marketPda;
 
         const [outcomeAMint, bumpOtA] = PublicKey.findProgramAddressSync(
             [Buffer.from("mint"), marketPda.toBuffer(), Buffer.from([0])],
@@ -157,7 +160,6 @@ describe("Prediction Market tests", () => {
         // Verify state persistence inside LiteSVM ledger
         const marketAccountInfo = svm.getAccount(marketPda);
         expect(marketAccountInfo).not.toBeNull();
-        console.log("MarketAccountInfo: ", marketAccountInfo);
         expect(marketAccountInfo?.owner.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
 
         const vaultAccountInfo = svm.getAccount(collateralVault);
@@ -170,5 +172,79 @@ describe("Prediction Market tests", () => {
 
         expect(Buffer.from(tokenAuthorityBytes).equals(marketPda.toBuffer())).toBe(true);
         console.log("✅ Verified: The collateral vault internal authority is strictly market_pda.");
+    });
+
+    test("Initialize Outcome Orderbooks", () => {
+        const [orderbookA, bumpObA] = PublicKey.findProgramAddressSync([
+            Buffer.from("orderbook_a"),
+            market_pda.toBuffer()
+        ], PROGRAM_ID);
+
+        const [orderbookB, bumpObB] = PublicKey.findProgramAddressSync([
+            Buffer.from("orderbook_b"),
+            market_pda.toBuffer()
+        ], PROGRAM_ID);
+
+        const instruction_data = Buffer.alloc(3);
+        instruction_data.writeUInt8(1, 0);
+        instruction_data.writeUInt8(bumpObA, 1);
+        instruction_data.writeUInt8(bumpObB, 2);
+
+        const keys = [
+            { pubkey: maker.publicKey, isSigner: true, isWritable: true },
+            { pubkey: market_pda, isSigner: false, isWritable: true },
+            { pubkey: orderbookA, isSigner: false, isWritable: true },
+            { pubkey: orderbookB, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ];
+
+        const initializeOrderbooksIx = new TransactionInstruction({
+            keys,
+            programId: PROGRAM_ID,
+            data: instruction_data
+        });
+
+        const tx = new Transaction().add(
+            initializeOrderbooksIx,
+            SystemProgram.transfer({
+                fromPubkey: maker.publicKey,
+                toPubkey: orderbookA,
+                lamports: 10_000_000,
+            }),
+            SystemProgram.transfer({
+                fromPubkey: maker.publicKey,
+                toPubkey: orderbookB,
+                lamports: 10_000_000
+            })
+        );
+
+        tx.recentBlockhash = svm.latestBlockhash();
+        tx.feePayer = maker.publicKey;
+        tx.sign(maker);
+
+        const txResult = svm.sendTransaction(tx);
+
+        if (txResult instanceof FailedTransactionMetadata) {
+            console.error("========== INITIALIZE ORDERBOOKS FAILED ===========");
+            console.error("Error details: ", txResult.err().toString());
+            const metadata = txResult.meta();
+            if (metadata) {
+                console.error("Program logs:\n", metadata.prettyLogs());
+            }
+            console.log("=================================================");
+        }
+
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const accountInfoA = svm.getAccount(orderbookA);
+        const accountInfoB = svm.getAccount(orderbookB);
+
+        expect(accountInfoA).not.toBeNull();
+        expect(accountInfoB).not.toBeNull();
+
+        expect(accountInfoA!.owner.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
+        expect(accountInfoB!.owner.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
+
+        console.log("✅ Verified: Orderbooks A & B initialized and bound to program memory.");
     });
 });
