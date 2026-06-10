@@ -135,35 +135,40 @@ pub struct OrderBookView<'a> {
 }
 
 impl<'a> OrderBookView<'a> {
-    pub unsafe fn load(ptr: *mut u8, tier: MarketTier) -> Self { unsafe {
-        let max_seats = match tier {
-            MarketTier::Small => SMALL_SEATS,
-            MarketTier::Medium => MEDIUM_SEATS,
-            MarketTier::Large => LARGE_SEATS,
-        };
-        let max_orders = match tier {
-            MarketTier::Small => SMALL_ORDERS,
-            MarketTier::Medium => MEDIUM_ORDERS,
-            MarketTier::Large => LARGE_ORDERS,
-        };
+    pub unsafe fn load(ptr: *mut u8, tier: MarketTier) -> Self {
+        unsafe {
+            let max_seats = match tier {
+                MarketTier::Small => SMALL_SEATS,
+                MarketTier::Medium => MEDIUM_SEATS,
+                MarketTier::Large => LARGE_SEATS,
+            };
+            let max_orders = match tier {
+                MarketTier::Small => SMALL_ORDERS,
+                MarketTier::Medium => MEDIUM_ORDERS,
+                MarketTier::Large => LARGE_ORDERS,
+            };
 
-        let offset_dir = core::mem::size_of::<OrderBookHeader>();
-        let offset_seats = offset_dir + (core::mem::size_of::<PriceLevel>() * 200);
-        let offset_orders = offset_seats + (core::mem::size_of::<TraderSeat>() * max_seats);
+            let offset_dir = core::mem::size_of::<OrderBookHeader>();
+            let offset_seats = offset_dir + (core::mem::size_of::<PriceLevel>() * 200);
+            let offset_orders = offset_seats + (core::mem::size_of::<TraderSeat>() * max_seats);
 
-        Self {
-            header: &mut *(ptr as *mut OrderBookHeader),
-            directory: core::slice::from_raw_parts_mut(ptr.add(offset_dir) as *mut PriceLevel, 200),
-            seats: core::slice::from_raw_parts_mut(
-                ptr.add(offset_seats) as *mut TraderSeat,
-                max_seats,
-            ),
-            orders: core::slice::from_raw_parts_mut(
-                ptr.add(offset_orders) as *mut OrderNode,
-                max_orders,
-            ),
+            Self {
+                header: &mut *(ptr as *mut OrderBookHeader),
+                directory: core::slice::from_raw_parts_mut(
+                    ptr.add(offset_dir) as *mut PriceLevel,
+                    200,
+                ),
+                seats: core::slice::from_raw_parts_mut(
+                    ptr.add(offset_seats) as *mut TraderSeat,
+                    max_seats,
+                ),
+                orders: core::slice::from_raw_parts_mut(
+                    ptr.add(offset_orders) as *mut OrderNode,
+                    max_orders,
+                ),
+            }
         }
-    }}
+    }
 }
 
 #[repr(C)]
@@ -191,7 +196,8 @@ impl CreateMarketArgs {
     }
 }
 
-#[repr(C)]
+// Not required after client-side generated keypairs
+/* #[repr(C)]
 pub struct InitializeOrderBookArgs {
     pub bump_book_a: u8,
     pub bump_book_b: u8,
@@ -208,7 +214,7 @@ impl InitializeOrderBookArgs {
             bump_book_b: bytes[1],
         })
     }
-}
+} */
 
 #[repr(C)]
 pub struct DepositCollateralArgs {

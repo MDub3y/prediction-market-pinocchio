@@ -1,19 +1,14 @@
-use pinocchio::{
-    AccountView, Address, ProgramResult,
-    cpi::{Seed, Signer},
-    error::ProgramError,
-};
-use pinocchio_system::instructions::CreateAccount;
+use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 use crate::state::{
-    InitializeOrderBookArgs, MarketState, MarketTier, OrderBookHeader, OrderNode, PriceLevel,
-    TraderSeat, calculate_orderbook_space,
+    MarketState, MarketTier, OrderBookHeader, OrderNode, PriceLevel, TraderSeat,
+    calculate_orderbook_space,
 };
 
 pub fn process_initialize_orderbooks(
     program_id: &Address,
     accounts: &mut [AccountView],
-    instruction_data: &[u8],
+    _instruction_data: &[u8],
 ) -> ProgramResult {
     let [
         creator,
@@ -27,7 +22,6 @@ pub fn process_initialize_orderbooks(
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
-    let args = InitializeOrderBookArgs::from_bytes(instruction_data)?;
     if !creator.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
     }
@@ -40,49 +34,18 @@ pub fn process_initialize_orderbooks(
 
     let required_space = calculate_orderbook_space(tier);
 
-    let a_bump_slice = [args.bump_book_a];
-    let raw_a_seeds: &[&[u8]] = &[b"orderbook_a", market_pda.address().as_ref(), &a_bump_slice];
-    let expected_book_a = Address::create_program_address(raw_a_seeds, program_id)
-        .map_err(|_| ProgramError::InvalidSeeds)?;
-    if orderbook_a.address() != &expected_book_a {
-        return Err(ProgramError::InvalidSeeds);
+    // Both orderbooks will be standard keypairs generated on client
+    // with program_id as the designated owner. This allows to create accounts
+    // with space allocation upto 10 MiB.
+    // Verify: if the owners of the orderbook accounts is program_id.
+    if orderbook_a.owner() != program_id || orderbook_b.owner() != program_id {
+        return Err(ProgramError::IncorrectAuthority);
     }
 
-    let b_bump_slice = [args.bump_book_b];
-    let raw_b_seeds: &[&[u8]] = &[b"orderbook_b", market_pda.address().as_ref(), &b_bump_slice];
-    let expected_book_b = Address::create_program_address(raw_b_seeds, program_id)
-        .map_err(|_| ProgramError::InvalidSeeds)?;
-    if orderbook_b.address() != &expected_book_b {
-        return Err(ProgramError::InvalidSeeds);
+    // Verify: if the client actually paid for the required memory footprint
+    if orderbook_a.data_len() < required_space || orderbook_b.data_len() < required_space {
+        return Err(ProgramError::AccountDataTooSmall);
     }
-
-    let signer_a_seeds = [
-        Seed::from(b"orderbook_a"),
-        Seed::from(market_pda.address().as_ref()),
-        Seed::from(&a_bump_slice),
-    ];
-    CreateAccount {
-        from: creator,
-        to: orderbook_a,
-        lamports: orderbook_a.lamports(),
-        space: required_space as u64,
-        owner: program_id,
-    }
-    .invoke_signed(&[Signer::from(&signer_a_seeds)])?;
-
-    let signer_b_seeds = [
-        Seed::from(b"orderbook_b"),
-        Seed::from(market_pda.address().as_ref()),
-        Seed::from(&b_bump_slice),
-    ];
-    CreateAccount {
-        from: creator,
-        to: orderbook_b,
-        lamports: orderbook_b.lamports(),
-        space: required_space as u64,
-        owner: program_id,
-    }
-    .invoke_signed(&[Signer::from(&signer_b_seeds)])?;
 
     for (idx, book_account) in [0u8, 1u8]
         .iter()
