@@ -6,6 +6,35 @@ import { LiteSVM, FailedTransactionMetadata, Rent } from "litesvm";
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const PROGRAM_ID = new PublicKey("D5rjf89YcBER8dJxLg1oekZFZqWUKqemSsMj5DWWXhZ9");
 
+function calculateOrderbookSpace(tier: number) {
+    const HEADER_SIZE = 44;
+    const DIRECTORY_SIZE = 8 * 100 * 2;
+    const SEAT_SIZE = 80;
+    const NODE_SIZE = 32;
+
+    let seats = 0;
+    let orders = 0;
+
+    switch (tier) {
+        case 0:
+            seats = 128;
+            orders = 512;
+            break;
+        case 1:
+            seats = 1024;
+            orders = 4096;
+            break;
+        case 2:
+            seats = 4096;
+            orders = 16384;
+            break;
+        default:
+            throw new Error(`Invalid market tier: ${tier}`);
+    }
+
+    return HEADER_SIZE + DIRECTORY_SIZE + (SEAT_SIZE * seats) + (NODE_SIZE * orders);
+}
+
 describe("Prediction Market tests", () => {
     let svm: LiteSVM;
     let maker: Keypair;
@@ -13,6 +42,7 @@ describe("Prediction Market tests", () => {
     let collateralMint: PublicKey;
     let marketId: bigint;
     let market_pda: PublicKey;
+    let marketTier: number;
 
     beforeAll(() => {
         svm = new LiteSVM();
@@ -57,7 +87,7 @@ describe("Prediction Market tests", () => {
     test("Create market instruction", () => {
         marketId = 42n;
         const settlementDeadline = BigInt(Math.floor(Date.now() / 1000) + 86400);
-        const tier = 1;
+        marketTier = 1;
 
         const marketIdBuffer = Buffer.alloc(8);
         marketIdBuffer.writeBigUInt64LE(marketId);
@@ -93,7 +123,7 @@ describe("Prediction Market tests", () => {
         instructionData.writeBigInt64LE(settlementDeadline, 9);
         instructionData.writeUInt8(bumpOtA, 17);
         instructionData.writeUInt8(bumpOtB, 18);
-        instructionData.writeUInt8(tier, 19);
+        instructionData.writeUInt8(marketTier, 19);
 
         const keys = [
             { pubkey: maker.publicKey, isSigner: true, isWritable: true },
@@ -175,52 +205,54 @@ describe("Prediction Market tests", () => {
     });
 
     test("Initialize Outcome Orderbooks", () => {
-        const [orderbookA, bumpObA] = PublicKey.findProgramAddressSync([
-            Buffer.from("orderbook_a"),
-            market_pda.toBuffer()
-        ], PROGRAM_ID);
+        const orderbookAKeypair = Keypair.generate();
+        const orderbookBKeypair = Keypair.generate();
 
-        const [orderbookB, bumpObB] = PublicKey.findProgramAddressSync([
-            Buffer.from("orderbook_b"),
-            market_pda.toBuffer()
-        ], PROGRAM_ID);
+        const requiredSpace = calculateOrderbookSpace(marketTier);
+        const rentRequired = Number(svm.minimumBalanceForRentExemption(BigInt(requiredSpace)));
 
-        const instruction_data = Buffer.alloc(3);
+        const tx = new Transaction();
+        tx.add(
+            SystemProgram.createAccount({
+                fromPubkey: maker.publicKey,
+                newAccountPubkey: orderbookAKeypair.publicKey,
+                lamports: rentRequired,
+                space: requiredSpace,
+                programId: PROGRAM_ID
+            })
+        );
+        tx.add(
+            SystemProgram.createAccount({
+                fromPubkey: maker.publicKey,
+                newAccountPubkey: orderbookBKeypair.publicKey,
+                lamports: rentRequired,
+                space: requiredSpace,
+                programId: PROGRAM_ID
+            })
+        );
+
+        const instruction_data = Buffer.alloc(1);
         instruction_data.writeUInt8(1, 0);
-        instruction_data.writeUInt8(bumpObA, 1);
-        instruction_data.writeUInt8(bumpObB, 2);
 
         const keys = [
             { pubkey: maker.publicKey, isSigner: true, isWritable: true },
             { pubkey: market_pda, isSigner: false, isWritable: true },
-            { pubkey: orderbookA, isSigner: false, isWritable: true },
-            { pubkey: orderbookB, isSigner: false, isWritable: true },
+            { pubkey: orderbookAKeypair.publicKey, isSigner: false, isWritable: true },
+            { pubkey: orderbookBKeypair.publicKey, isSigner: false, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ];
 
-        const initializeOrderbooksIx = new TransactionInstruction({
-            keys,
-            programId: PROGRAM_ID,
-            data: instruction_data
-        });
-
-        const tx = new Transaction().add(
-            initializeOrderbooksIx,
-            SystemProgram.transfer({
-                fromPubkey: maker.publicKey,
-                toPubkey: orderbookA,
-                lamports: 10_000_000,
-            }),
-            SystemProgram.transfer({
-                fromPubkey: maker.publicKey,
-                toPubkey: orderbookB,
-                lamports: 10_000_000
+        tx.add(
+            new TransactionInstruction({
+                keys,
+                programId: PROGRAM_ID,
+                data: instruction_data
             })
         );
 
         tx.recentBlockhash = svm.latestBlockhash();
         tx.feePayer = maker.publicKey;
-        tx.sign(maker);
+        tx.sign(maker, orderbookAKeypair, orderbookBKeypair);
 
         const txResult = svm.sendTransaction(tx);
 
@@ -236,15 +268,14 @@ describe("Prediction Market tests", () => {
 
         expect(txResult instanceof FailedTransactionMetadata).toBe(false);
 
-        const accountInfoA = svm.getAccount(orderbookA);
-        const accountInfoB = svm.getAccount(orderbookB);
+        const accountInfoA = svm.getAccount(orderbookAKeypair.publicKey);
+        const accountInfoB = svm.getAccount(orderbookBKeypair.publicKey);
 
         expect(accountInfoA).not.toBeNull();
         expect(accountInfoB).not.toBeNull();
-
         expect(accountInfoA!.owner.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
         expect(accountInfoB!.owner.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
 
-        console.log("✅ Verified: Orderbooks A & B initialized and bound to program memory.");
+        console.log(`✅ Verified: Footprint of ${requiredSpace} bytes initialized for Medium Tier orderbooks.`);
     });
 });
