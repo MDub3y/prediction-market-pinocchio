@@ -443,7 +443,6 @@ describe("Prediction Market tests", () => {
         expect(txResult instanceof FailedTransactionMetadata).toBe(false);
 
         const orderbookAccountInfo = svm.getAccount(sharedOrderbookA.publicKey);
-        console.log("<<<<<<<<<< ORDERBOOK ACCOUNT INFO >>>>>>>>>>>\n", orderbookAccountInfo);
         expect(orderbookAccountInfo).not.toBeNull();
 
         const dataBuffer = Buffer.from(orderbookAccountInfo!.data);
