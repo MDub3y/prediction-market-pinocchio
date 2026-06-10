@@ -1,5 +1,5 @@
 import { Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
-import { createInitializeMintInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { createAssociatedTokenAccountInstruction, createInitializeMintInstruction, createMintToInstruction, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { expect, test, describe, beforeAll } from "bun:test";
 import { LiteSVM, FailedTransactionMetadata, Rent } from "litesvm";
 
@@ -43,6 +43,7 @@ describe("Prediction Market tests", () => {
     let marketId: bigint;
     let market_pda: PublicKey;
     let marketTier: number;
+    let collateralVault: PublicKey;
 
     beforeAll(() => {
         svm = new LiteSVM();
@@ -108,7 +109,7 @@ describe("Prediction Market tests", () => {
             PROGRAM_ID
         );
 
-        const [collateralVault] = PublicKey.findProgramAddressSync(
+        const [derivedVault] = PublicKey.findProgramAddressSync(
             [
                 marketPda.toBuffer(),
                 TOKEN_PROGRAM_ID.toBuffer(),
@@ -116,6 +117,7 @@ describe("Prediction Market tests", () => {
             ],
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
+        collateralVault = derivedVault;
 
         const instructionData = Buffer.alloc(20);
         instructionData.writeUInt8(0, 0);
@@ -277,5 +279,104 @@ describe("Prediction Market tests", () => {
         expect(accountInfoB!.owner.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
 
         console.log(`✅ Verified: Footprint of ${requiredSpace} bytes initialized for Medium Tier orderbooks.`);
+    });
+
+    test("Deposit collateral from retail user", () => {
+        const user = Keypair.generate();
+        svm.airdrop(user.publicKey, 2_000_000_000n);
+
+        const userTokenAccount = getAssociatedTokenAddressSync(collateralMint, user.publicKey);
+
+        const setupTx = new Transaction().add(
+            createAssociatedTokenAccountInstruction(
+                user.publicKey,
+                userTokenAccount,
+                user.publicKey,
+                collateralMint
+            ),
+            createMintToInstruction(
+                collateralMint,
+                userTokenAccount,
+                maker.publicKey,
+                500_000_000n
+            )
+        );
+        setupTx.recentBlockhash = svm.latestBlockhash();
+        setupTx.feePayer = user.publicKey;
+        setupTx.sign(user, maker);
+
+        const setupResult = svm.sendTransaction(setupTx);
+        expect(setupResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const [platformUserState, bumpUserState] = PublicKey.findProgramAddressSync(
+            [Buffer.from("user_state"), user.publicKey.toBuffer()],
+            PROGRAM_ID
+        );
+
+        const depositAmount = 200_000_000n;
+
+        const instructionData = Buffer.alloc(10);
+        instructionData.writeUInt8(2, 0);
+        instructionData.writeBigUInt64LE(depositAmount, 1);
+        instructionData.writeUInt8(bumpUserState, 9);
+
+        const keys = [
+            { pubkey: user.publicKey, isSigner: true, isWritable: true },
+            { pubkey: platformUserState, isSigner: false, isWritable: true },
+            { pubkey: userTokenAccount, isSigner: false, isWritable: true },
+            { pubkey: collateralVault, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ];
+
+        const depositCollateralIx = new TransactionInstruction({
+            keys,
+            programId: PROGRAM_ID,
+            data: instructionData
+        });
+
+        const tx = new Transaction().add(
+            depositCollateralIx,
+            SystemProgram.transfer({
+                fromPubkey: user.publicKey,
+                toPubkey: platformUserState,
+                lamports: 3_000_000,
+            })
+        );
+
+        tx.recentBlockhash = svm.latestBlockhash();
+        tx.feePayer = user.publicKey;
+        tx.sign(user);
+
+        const txResult = svm.sendTransaction(tx);
+
+        if (txResult instanceof FailedTransactionMetadata) {
+            console.error("========== DEPOSIT COLLATERAL FAILED ===========");
+            console.error("Error details: ", txResult.err().toString());
+            const metadata = txResult.meta();
+            if (metadata) {
+                console.error("Program logs:\n", metadata.prettyLogs());
+            }
+            console.log("=================================================");
+        }
+
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const stateAccountInfo = svm.getAccount(platformUserState);
+        expect(stateAccountInfo).not.toBeNull();
+
+        const ownerBytes = stateAccountInfo!.owner;
+        expect(ownerBytes.toBuffer().equals(PROGRAM_ID.toBuffer())).toBe(true);
+
+        const rawData = stateAccountInfo!.data;
+        const dataBuffer = Buffer.from(rawData);
+
+        const savedWalletBytes = dataBuffer.subarray(0, 32);
+        const savedCollateralValue = dataBuffer.readBigUInt64LE(32);
+
+        expect(Buffer.from(savedWalletBytes).equals(user.publicKey.toBuffer())).toBe(true);
+        expect(savedCollateralValue).toBe(depositAmount);
+
+        console.log(`✅ Verified: New user safely deposited ${depositAmount} tokens into the vault.`);
     });
 });
