@@ -45,6 +45,11 @@ describe("Prediction Market tests", () => {
     let marketTier: number;
     let collateralVault: PublicKey;
 
+    let retailUser: Keypair;
+    let retailUserState: PublicKey;
+    let sharedOrderbookA: Keypair;
+    let sharedOrderbookB: Keypair;
+
     beforeAll(() => {
         svm = new LiteSVM();
 
@@ -209,6 +214,8 @@ describe("Prediction Market tests", () => {
     test("Initialize Outcome Orderbooks", () => {
         const orderbookAKeypair = Keypair.generate();
         const orderbookBKeypair = Keypair.generate();
+        sharedOrderbookA = orderbookAKeypair;
+        sharedOrderbookB = orderbookBKeypair;
 
         const requiredSpace = calculateOrderbookSpace(marketTier);
         const rentRequired = Number(svm.minimumBalanceForRentExemption(BigInt(requiredSpace)));
@@ -283,6 +290,7 @@ describe("Prediction Market tests", () => {
 
     test("Deposit collateral from retail user", () => {
         const user = Keypair.generate();
+        retailUser = user;
         svm.airdrop(user.publicKey, 2_000_000_000n);
 
         const userTokenAccount = getAssociatedTokenAddressSync(collateralMint, user.publicKey);
@@ -312,6 +320,7 @@ describe("Prediction Market tests", () => {
             [Buffer.from("user_state"), user.publicKey.toBuffer()],
             PROGRAM_ID
         );
+        retailUserState = platformUserState;
 
         const depositAmount = 200_000_000n;
 
@@ -378,5 +387,82 @@ describe("Prediction Market tests", () => {
         expect(savedCollateralValue).toBe(depositAmount);
 
         console.log(`✅ Verified: New user safely deposited ${depositAmount} tokens into the vault.`);
+    });
+
+    test("Place limit order by retail user on outcome A", () => {
+        expect(retailUser).not.toBeUndefined();
+        expect(retailUserState).not.toBeUndefined();
+        expect(sharedOrderbookA).not.toBeUndefined();
+
+        const outcome = 0;
+        const side = 0;
+        const orderType = 0;
+        const price = 50;
+        const quantity = 1_000_000n;
+        const orderId = 1001n;
+
+        const instructionData = Buffer.alloc(21);
+        instructionData.writeUInt8(3, 0);
+        instructionData.writeUInt8(outcome, 1);
+        instructionData.writeUInt8(side, 2);
+        instructionData.writeUInt8(orderType, 3);
+        instructionData.writeUInt8(price, 4);
+        instructionData.writeBigUInt64LE(quantity, 5);
+        instructionData.writeBigUInt64LE(orderId, 13);
+
+        const keys = [
+            { pubkey: retailUser.publicKey, isSigner: true, isWritable: true },
+            { pubkey: market_pda, isSigner: false, isWritable: true },
+            { pubkey: retailUserState, isSigner: false, isWritable: true },
+            { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
+        ];
+
+        const placeOrderIx = new TransactionInstruction({
+            keys,
+            programId: PROGRAM_ID,
+            data: instructionData
+        });
+
+        const tx = new Transaction().add(placeOrderIx);
+        tx.recentBlockhash = svm.latestBlockhash();
+        tx.feePayer = retailUser.publicKey;
+        tx.sign(retailUser);
+
+        const txResult = svm.sendTransaction(tx);
+
+        if (txResult instanceof FailedTransactionMetadata) {
+            console.error("========== PLACE ORDER FAILED ===========");
+            console.error("Error details: ", txResult.err().toString());
+            const metadata = txResult.meta();
+            if (metadata) {
+                console.error("Program logs:\n", metadata.prettyLogs());
+            }
+            console.log("=========================================");
+        }
+
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const orderbookAccountInfo = svm.getAccount(sharedOrderbookA.publicKey);
+        console.log("<<<<<<<<<< ORDERBOOK ACCOUNT INFO >>>>>>>>>>>\n", orderbookAccountInfo);
+        expect(orderbookAccountInfo).not.toBeNull();
+
+        const dataBuffer = Buffer.from(orderbookAccountInfo!.data);
+
+        const savedMarketStatePda = new PublicKey(dataBuffer.subarray(0, 32));
+        const totalAllocatedSeats = dataBuffer.readUInt32LE(32);
+        const nextFreeNodeIdx = dataBuffer.readUInt32LE(36);
+
+        expect(savedMarketStatePda.equals(market_pda)).toBe(true);
+        expect(totalAllocatedSeats).toBe(1);
+        expect(nextFreeNodeIdx).not.toBe(1);
+
+        const userStateAccountInfo = svm.getAccount(retailUserState);
+        const userStateBuffer = Buffer.from(userStateAccountInfo!.data);
+
+        const collateralAvailable = userStateBuffer.readBigUInt64LE(32);
+        const expectedRemaining = 200_000_000n - (quantity * BigInt(price));
+
+        expect(collateralAvailable).toBe(expectedRemaining);
+        console.log(`✅ Verified: Limit Buy Order placed successfully. Remaining free user balance: ${collateralAvailable}`);
     });
 });
