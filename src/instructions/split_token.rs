@@ -8,7 +8,7 @@ use pinocchio_token::instructions::MintTo;
 use crate::state::{MarketState, PlatformUserState, SplitTokensArgs};
 
 pub fn process_split_token(
-    _program_id: &Address,
+    program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
@@ -40,6 +40,27 @@ pub fn process_split_token(
         }
         state.bump
     };
+
+    let state_bump = unsafe {
+        let user_data = platform_user_state.borrow_unchecked();
+        let state = PlatformUserState::from_bytes(&user_data)?;
+        if state.wallet != *user.address() {
+            return Err(ProgramError::IncorrectAuthority);
+        }
+        if state.collateral_available < args.amount {
+            return Err(ProgramError::InsufficientFunds);
+        }
+        state.bump
+    };
+
+    let bump_slice = [state_bump];
+    let expected_state_seeds: &[&[u8]] = &[b"user_state", user.address().as_ref(), &bump_slice];
+    let expected_state_pda = Address::create_program_address(expected_state_seeds, program_id)
+        .map_err(|_| ProgramError::InvalidSeeds)?;
+
+    if platform_user_state.address() != &expected_state_pda {
+        return Err(ProgramError::InvalidSeeds);
+    }
 
     unsafe {
         let user_data = platform_user_state.borrow_unchecked();

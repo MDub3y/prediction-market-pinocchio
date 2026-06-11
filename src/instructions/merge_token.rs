@@ -3,7 +3,7 @@ use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 use pinocchio_token::instructions::Burn;
 
 pub fn process_merge_token(
-    _program_id: &Address,
+    program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
@@ -35,12 +35,22 @@ pub fn process_merge_token(
         }
     }
 
-    unsafe {
+    let state_bump = unsafe {
         let user_data = platform_user_state.borrow_unchecked();
         let state = PlatformUserState::from_bytes(&user_data)?;
         if state.wallet != *user.address() {
             return Err(ProgramError::IncorrectAuthority);
         }
+        state.bump
+    };
+
+    let bump_slice = [state_bump];
+    let expected_state_seeds: &[&[u8]] = &[b"user_state", user.address().as_ref(), &bump_slice];
+    let expected_state_pda = Address::create_program_address(expected_state_seeds, program_id)
+        .map_err(|_| ProgramError::InvalidSeeds)?;
+
+    if platform_user_state.address() != &expected_state_pda {
+        return Err(ProgramError::InvalidSeeds);
     }
 
     Burn::new(outcome_a_mint, user_outcome_a, user, args.amount).invoke()?;
