@@ -253,6 +253,23 @@ impl SplitTokensArgs {
 }
 
 #[repr(C)]
+pub struct MergeTokensArgs {
+    pub amount: u64,
+}
+
+impl MergeTokensArgs {
+    pub const LEN: usize = 8;
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        Ok(Self {
+            amount: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+        })
+    }
+}
+
+#[repr(C)]
 pub struct PlaceOrderArgs {
     pub outcome: u8,
     pub side: u8,
