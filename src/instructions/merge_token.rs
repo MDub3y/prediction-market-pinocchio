@@ -2,7 +2,7 @@ use crate::state::{MarketState, MergeTokensArgs, PlatformUserState};
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 use pinocchio_token::instructions::Burn;
 
-pub fn process_merge_tokens(
+pub fn process_merge_token(
     _program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],

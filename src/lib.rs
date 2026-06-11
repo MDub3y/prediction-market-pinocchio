@@ -30,9 +30,12 @@ pub fn process_instruction(
         2 => {
             instructions::deposit_collateral::process_deposit_collateral(program_id, accounts, rest)
         }
-        3 => instructions::place_order::process_place_order(program_id, accounts, rest),
-        4 => instructions::cancel_order::process_cancel_order(program_id, accounts, rest),
-        5 => instructions::claim_funds::process_claim_funds(program_id, accounts, rest),
+        3 => instructions::split_token::process_split_token(program_id, accounts, rest),
+        4 => instructions::merge_token::process_merge_token(program_id, accounts, rest),
+        5 => instructions::place_order::process_place_order(program_id, accounts, rest),
+        6 => instructions::cancel_order::process_cancel_order(program_id, accounts, rest),
+        7 => instructions::claim_funds::process_claim_funds(program_id, accounts, rest),
+
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
