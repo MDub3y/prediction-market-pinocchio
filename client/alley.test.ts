@@ -402,7 +402,7 @@ describe("Prediction Market tests", () => {
         const orderId = 1001n;
 
         const instructionData = Buffer.alloc(21);
-        instructionData.writeUInt8(3, 0);
+        instructionData.writeUInt8(5, 0);
         instructionData.writeUInt8(outcome, 1);
         instructionData.writeUInt8(side, 2);
         instructionData.writeUInt8(orderType, 3);
@@ -463,5 +463,84 @@ describe("Prediction Market tests", () => {
 
         expect(collateralAvailable).toBe(expectedRemaining);
         console.log(`✅ Verified: Limit Buy Order placed successfully. Remaining free user balance: ${collateralAvailable}`);
+    });
+
+    test("Split order from retail user's platform state credit", () => {
+        const [outcomeAMint] = PublicKey.findProgramAddressSync([
+            Buffer.from("mint"),
+            market_pda.toBuffer(),
+            Buffer.from([0])
+        ],
+            PROGRAM_ID
+        );
+        const [outcomeBMint] = PublicKey.findProgramAddressSync([
+            Buffer.from("mint"),
+            market_pda.toBuffer(),
+            Buffer.from([1])
+        ],
+            PROGRAM_ID
+        );
+
+        const userOutcomeA = getAssociatedTokenAddressSync(outcomeAMint, retailUser.publicKey);
+        const userOutcomeB = getAssociatedTokenAddressSync(outcomeBMint, retailUser.publicKey);
+
+        const prepareWalletTx = new Transaction().add(
+            createAssociatedTokenAccountInstruction(retailUser.publicKey, userOutcomeA, retailUser.publicKey, outcomeAMint),
+            createAssociatedTokenAccountInstruction(retailUser.publicKey, userOutcomeB, retailUser.publicKey, outcomeBMint),
+        );
+        prepareWalletTx.recentBlockhash = svm.latestBlockhash();
+        prepareWalletTx.feePayer = retailUser.publicKey;
+        prepareWalletTx.sign(retailUser);
+
+        const prepareResult = svm.sendTransaction(prepareWalletTx);
+        expect(prepareResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const splitAmount = 50_000_000n;
+        const instructionData = Buffer.alloc(9);
+        instructionData.writeUInt8(3, 0);
+        instructionData.writeBigUInt64LE(splitAmount, 1);
+
+        const keys = [
+            { pubkey: retailUser.publicKey, isSigner: true, isWritable: true },
+            { pubkey: market_pda, isSigner: false, isWritable: true },
+            { pubkey: retailUserState, isSigner: false, isWritable: true },
+            { pubkey: outcomeAMint, isSigner: false, isWritable: true },
+            { pubkey: outcomeBMint, isSigner: false, isWritable: true },
+            { pubkey: userOutcomeA, isSigner: false, isWritable: true },
+            { pubkey: userOutcomeB, isSigner: false, isWritable: true },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ];
+
+        const splitIx = new TransactionInstruction({
+            keys,
+            programId: PROGRAM_ID,
+            data: instructionData,
+        });
+
+        const tx = new Transaction().add(splitIx);
+        tx.recentBlockhash = svm.latestBlockhash();
+        tx.feePayer = retailUser.publicKey;
+        tx.sign(retailUser);
+
+        const txResult = svm.sendTransaction(tx);
+        if (txResult instanceof FailedTransactionMetadata) {
+            console.error("========== SPLIT TOKENS FAILED ===========");
+            console.error("Error details: ", txResult.err().toString());
+            console.error("Program logs:\n", txResult.meta()?.prettyLogs());
+            console.log("==========================================");
+        }
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const tokenABalance = svm.getAccount(userOutcomeA);
+        const tokenBBalance = svm.getAccount(userOutcomeB);
+        expect(tokenABalance).not.toBeNull();
+        expect(tokenBBalance).not.toBeNull();
+
+        const userStateAccountInfo = svm.getAccount(retailUserState);
+        const stateBuffer = Buffer.from(userStateAccountInfo!.data);
+        const collateralAvailable = stateBuffer.readBigUInt64LE(32);
+
+        expect(collateralAvailable).toBe(100_000_000n);
+        console.log(`✅ Verified: Split processed. Mints executed. Platform balance: ${collateralAvailable}`);
     });
 });
