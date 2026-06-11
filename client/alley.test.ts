@@ -543,4 +543,66 @@ describe("Prediction Market tests", () => {
         expect(collateralAvailable).toBe(100_000_000n);
         console.log(`✅ Verified: Split processed. Mints executed. Platform balance: ${collateralAvailable}`);
     });
+
+    test("Merge order from retail user's platform state credit", () => {
+        const [outcomeAMint] = PublicKey.findProgramAddressSync([
+            Buffer.from("mint"),
+            market_pda.toBuffer(),
+            Buffer.from([0])
+        ],
+            PROGRAM_ID
+        );
+        const [outcomeBMint] = PublicKey.findProgramAddressSync([
+            Buffer.from("mint"),
+            market_pda.toBuffer(),
+            Buffer.from([1])
+        ],
+            PROGRAM_ID
+        );
+
+        const userOutcomeA = getAssociatedTokenAddressSync(outcomeAMint, retailUser.publicKey);
+        const userOutcomeB = getAssociatedTokenAddressSync(outcomeBMint, retailUser.publicKey);
+
+        const mergeAmount = 20_000_000n;
+        const instructionData = Buffer.alloc(9);
+        instructionData.writeUInt8(4, 0);
+        instructionData.writeBigUInt64LE(mergeAmount, 1);
+
+        const keys = [
+            { pubkey: retailUser.publicKey, isSigner: true, isWritable: true },
+            { pubkey: market_pda, isSigner: false, isWritable: true },
+            { pubkey: retailUserState, isSigner: false, isWritable: true },
+            { pubkey: outcomeAMint, isSigner: false, isWritable: true },
+            { pubkey: outcomeBMint, isSigner: false, isWritable: true },
+            { pubkey: userOutcomeA, isSigner: false, isWritable: true },
+            { pubkey: userOutcomeB, isSigner: false, isWritable: true },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ];
+
+        const mergeIx = new TransactionInstruction({
+            keys,
+            programId: PROGRAM_ID,
+            data: instructionData
+        });
+        const tx = new Transaction().add(mergeIx);
+        tx.recentBlockhash = svm.latestBlockhash();
+        tx.feePayer = retailUser.publicKey;
+        tx.sign(retailUser);
+
+        const txResult = svm.sendTransaction(tx);
+        if (txResult instanceof FailedTransactionMetadata) {
+            console.error("========== MERGE TOKENS FAILED ===========");
+            console.error("Error details: ", txResult.err().toString());
+            console.error("Program logs:\n", txResult.meta()?.prettyLogs());
+            console.log("==========================================");
+        }
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const userStateAccountInfo = svm.getAccount(retailUserState);
+        const stateBuffer = Buffer.from(userStateAccountInfo!.data);
+        const collateralAvailable = stateBuffer.readBigUInt64LE(32);
+
+        expect(collateralAvailable).toBe(120_000_000n);
+        console.log(`✅ Verified: Merge complete. Re-credited platform wallet balance: ${collateralAvailable}`);
+    });
 });

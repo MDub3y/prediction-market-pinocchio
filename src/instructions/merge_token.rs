@@ -53,8 +53,8 @@ pub fn process_merge_token(
         return Err(ProgramError::InvalidSeeds);
     }
 
-    Burn::new(outcome_a_mint, user_outcome_a, user, args.amount).invoke()?;
-    Burn::new(outcome_b_mint, user_outcome_b, user, args.amount).invoke()?;
+    Burn::new(user_outcome_a, outcome_a_mint, user, args.amount).invoke()?;
+    Burn::new(user_outcome_b, outcome_b_mint, user, args.amount).invoke()?;
 
     unsafe {
         let user_data_mut = platform_user_state.borrow_unchecked_mut();
