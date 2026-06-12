@@ -91,6 +91,9 @@ pub struct TraderSeat {
     pub collateral_claimable: u64,
     pub ot_a_claimable: u64,
     pub ot_b_claimable: u64,
+    pub total_volume_traded: u64,
+    pub successful_trades_count: u32,
+    pub padding: [u8; 4],
 }
 
 #[repr(C)]
