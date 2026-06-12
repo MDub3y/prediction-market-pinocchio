@@ -605,4 +605,125 @@ describe("Prediction Market tests", () => {
         expect(collateralAvailable).toBe(120_000_000n);
         console.log(`✅ Verified: Merge complete. Re-credited platform wallet balance: ${collateralAvailable}`);
     });
+
+    test("Setup multi-level Bid liquidity (Bids at 48 and 45)", async () => {
+        const buyer2 = Keypair.generate();
+        svm.airdrop(buyer2.publicKey, 2_000_000_000n);
+
+        const buyer2TokenAccount = getAssociatedTokenAddressSync(collateralMint, buyer2.publicKey);
+        const setupTx2 = new Transaction().add(
+            createAssociatedTokenAccountInstruction(buyer2.publicKey, buyer2TokenAccount, buyer2.publicKey, collateralMint),
+            createMintToInstruction(collateralMint, buyer2TokenAccount, maker.publicKey, 500_000_000n)
+        );
+        setupTx2.recentBlockhash = svm.latestBlockhash();
+        setupTx2.feePayer = buyer2.publicKey;
+        setupTx2.sign(buyer2, maker);
+        expect(svm.sendTransaction(setupTx2) instanceof FailedTransactionMetadata).toBe(false);
+
+        const [buyer2State, bump2] = PublicKey.findProgramAddressSync([Buffer.from("user_state"), buyer2.publicKey.toBuffer()], PROGRAM_ID);
+
+        const depositIx2 = new TransactionInstruction({
+            keys: [
+                { pubkey: buyer2.publicKey, isSigner: true, isWritable: true },
+                { pubkey: buyer2State, isSigner: false, isWritable: true },
+                { pubkey: buyer2TokenAccount, isSigner: false, isWritable: true },
+                { pubkey: collateralVault, isSigner: false, isWritable: true },
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            ],
+            programId: PROGRAM_ID,
+            data: Buffer.from([2, ...new Uint8Array(new Uint8Array(new BigUint64Array([200_000_000n]).buffer)), bump2])
+        });
+
+        const depositTx2 = new Transaction().add(depositIx2, SystemProgram.transfer({ fromPubkey: buyer2.publicKey, toPubkey: buyer2State, lamports: 3_000_000 }));
+        depositTx2.recentBlockhash = svm.latestBlockhash();
+        depositTx2.feePayer = buyer2.publicKey;
+        depositTx2.sign(buyer2);
+        expect(svm.sendTransaction(depositTx2) instanceof FailedTransactionMetadata).toBe(false);
+
+        const orderData2 = Buffer.alloc(21);
+        orderData2.writeUInt8(5, 0);
+        orderData2.writeUInt8(0, 1);
+        orderData2.writeUInt8(0, 2);
+        orderData2.writeUInt8(0, 3);
+        orderData2.writeUInt8(48, 4);
+        orderData2.writeBigUInt64LE(2_000_000n, 5);
+        orderData2.writeBigUInt64LE(2001n, 13);
+
+        const buyTx2 = new Transaction().add(new TransactionInstruction({
+            keys: [
+                { pubkey: buyer2.publicKey, isSigner: true, isWritable: true },
+                { pubkey: market_pda, isSigner: false, isWritable: true },
+                { pubkey: buyer2State, isSigner: false, isWritable: true },
+                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
+            ],
+            programId: PROGRAM_ID,
+            data: orderData2
+        }));
+        buyTx2.recentBlockhash = svm.latestBlockhash();
+        buyTx2.feePayer = buyer2.publicKey;
+        buyTx2.sign(buyer2);
+        expect(svm.sendTransaction(buyTx2) instanceof FailedTransactionMetadata).toBe(false);
+
+
+        const buyer3 = Keypair.generate();
+        svm.airdrop(buyer3.publicKey, 2_000_000_000n);
+
+        const buyer3TokenAccount = getAssociatedTokenAddressSync(collateralMint, buyer3.publicKey);
+        const setupTx3 = new Transaction().add(
+            createAssociatedTokenAccountInstruction(buyer3.publicKey, buyer3TokenAccount, buyer3.publicKey, collateralMint),
+            createMintToInstruction(collateralMint, buyer3TokenAccount, maker.publicKey, 500_000_000n)
+        );
+        setupTx3.recentBlockhash = svm.latestBlockhash();
+        setupTx3.feePayer = buyer3.publicKey;
+        setupTx3.sign(buyer3, maker);
+        expect(svm.sendTransaction(setupTx3) instanceof FailedTransactionMetadata).toBe(false);
+
+        const [buyer3State, bump3] = PublicKey.findProgramAddressSync([Buffer.from("user_state"), buyer3.publicKey.toBuffer()], PROGRAM_ID);
+
+        const depositIx3 = new TransactionInstruction({
+            keys: [
+                { pubkey: buyer3.publicKey, isSigner: true, isWritable: true },
+                { pubkey: buyer3State, isSigner: false, isWritable: true },
+                { pubkey: buyer3TokenAccount, isSigner: false, isWritable: true },
+                { pubkey: collateralVault, isSigner: false, isWritable: true },
+                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            ],
+            programId: PROGRAM_ID,
+            data: Buffer.from([2, ...new Uint8Array(new Uint8Array(new BigUint64Array([200_000_000n]).buffer)), bump3])
+        });
+
+        const depositTx3 = new Transaction().add(depositIx3, SystemProgram.transfer({ fromPubkey: buyer3.publicKey, toPubkey: buyer3State, lamports: 3_000_000 }));
+        depositTx3.recentBlockhash = svm.latestBlockhash();
+        depositTx3.feePayer = buyer3.publicKey;
+        depositTx3.sign(buyer3);
+        expect(svm.sendTransaction(depositTx3) instanceof FailedTransactionMetadata).toBe(false);
+
+        const orderData3 = Buffer.alloc(21);
+        orderData3.writeUInt8(5, 0);
+        orderData3.writeUInt8(0, 1);
+        orderData3.writeUInt8(0, 2);
+        orderData3.writeUInt8(0, 3);
+        orderData3.writeUInt8(45, 4);
+        orderData3.writeBigUInt64LE(3_000_000n, 5);
+        orderData3.writeBigUInt64LE(3001n, 13);
+
+        const buyTx3 = new Transaction().add(new TransactionInstruction({
+            keys: [
+                { pubkey: buyer3.publicKey, isSigner: true, isWritable: true },
+                { pubkey: market_pda, isSigner: false, isWritable: true },
+                { pubkey: buyer3State, isSigner: false, isWritable: true },
+                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
+            ],
+            programId: PROGRAM_ID,
+            data: orderData3
+        }));
+        buyTx3.recentBlockhash = svm.latestBlockhash();
+        buyTx3.feePayer = buyer3.publicKey;
+        buyTx3.sign(buyer3);
+        expect(svm.sendTransaction(buyTx3) instanceof FailedTransactionMetadata).toBe(false);
+
+        console.log("✅ Verified: Orderbook populated with tiered Bids at 50, 48, and 45.");
+    });
 });
