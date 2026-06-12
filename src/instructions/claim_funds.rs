@@ -2,7 +2,7 @@ use crate::state::{ClaimFundsArgs, MarketState, MarketTier, OrderBookView, Platf
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 pub fn process_claim_funds(
-    _program_id: &Address,
+    program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
@@ -13,6 +13,30 @@ pub fn process_claim_funds(
     let args = ClaimFundsArgs::from_bytes(instruction_data)?;
     if !user.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    if platform_user_state.data_len() < PlatformUserState::LEN {
+        return Err(ProgramError::InvalidAccountData);
+    }
+
+    // 2. Validate Platform State Ownership and Extract Stored Bump
+    let state_bump = unsafe {
+        let user_data = platform_user_state.borrow_unchecked();
+        let state = PlatformUserState::from_bytes(&user_data)?;
+        if state.wallet != *user.address() {
+            return Err(ProgramError::IncorrectAuthority);
+        }
+        state.bump
+    };
+
+    // 3. SECURE FIXED: Re-derive and verify off-curve PDA integrity
+    let bump_slice = [state_bump];
+    let expected_state_seeds: &[&[u8]] = &[b"user_state", user.address().as_ref(), &bump_slice];
+    let expected_state_pda = Address::create_program_address(expected_state_seeds, program_id)
+        .map_err(|_| ProgramError::InvalidSeeds)?;
+
+    if platform_user_state.address() != &expected_state_pda {
+        return Err(ProgramError::InvalidSeeds);
     }
 
     let tier = unsafe {
