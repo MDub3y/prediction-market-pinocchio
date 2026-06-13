@@ -1,6 +1,4 @@
-use crate::state::{
-    MarketState, MarketTier, OrderBookView, PlaceOrderArgs, PlatformUserState,
-};
+use crate::state::{MarketState, MarketTier, OrderBookView, PlaceOrderArgs, PlatformUserState};
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 const FEE_BASIS_POINTS: u64 = 20;
@@ -140,10 +138,7 @@ pub fn process_place_order(
             }
         } else {
             let counter_side = if args.side == 0 { 1 } else { 0 };
-            let target_dir_index = (counter_side * 100) + args.price as usize;
-
             let mut taker_remaining = args.quantity;
-            let level = &mut view.directory[target_dir_index];
 
             let market_state_data = market_pda.borrow_unchecked_mut();
             let market_mut = &mut *(market_state_data.as_mut_ptr() as *mut MarketState);
@@ -151,76 +146,119 @@ pub fn process_place_order(
             let taker_data = platform_user_state.borrow_unchecked_mut();
             let taker_mut = &mut *(taker_data.as_mut_ptr() as *mut PlatformUserState);
 
-            while taker_remaining > 0 && level.head != 0 {
-                let head_node_idx = level.head as usize;
-                let maker_order = &mut view.orders[head_node_idx];
-
-                let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
-
-                let match_qty = if taker_remaining < maker_order.quantity {
-                    taker_remaining
-                } else {
-                    maker_order.quantity
-                };
-                let trade_collateral = match_qty * (args.price as u64);
-                let fee = (trade_collateral * FEE_BASIS_POINTS) / 10_000;
-                let net_collateral = trade_collateral - fee;
-
-                if args.side == 0 {
-                    // Taker Buying vs Maker Resting Seller
-                    if taker_mut.collateral_available < trade_collateral {
-                        return Err(ProgramError::InsufficientFunds);
+            if counter_side == 0 {
+                for current_price in (args.price as usize..=99).rev() {
+                    if taker_remaining == 0 {
+                        break;
                     }
 
-                    maker_seat.collateral_claimable += net_collateral;
-                    taker_mut.collateral_available -= trade_collateral;
+                    let target_dir_index = current_price;
+                    let level = &mut view.directory[target_dir_index];
 
-                    let s_idx = seat_idx.unwrap();
-                    let taker_seat = &mut *seats_ptr.add(s_idx);
-                    if args.outcome == 0 {
-                        taker_seat.ot_a_claimable += match_qty;
-                    } else {
-                        taker_seat.ot_b_claimable += match_qty;
-                    }
-                } else {
-                    // Taker Selling vs Maker Resting Buyer
-                    let s_idx = seat_idx.ok_or(ProgramError::InsufficientFunds)?;
-                    let taker_seat = &mut *seats_ptr.add(s_idx);
+                    while taker_remaining > 0 && level.head != 0 {
+                        let head_node_idx = level.head as usize;
+                        let maker_order = &mut view.orders[head_node_idx];
+                        let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
 
-                    if args.outcome == 0 {
-                        if taker_seat.ot_a_claimable < match_qty {
-                            return Err(ProgramError::InsufficientFunds);
+                        let match_qty = if taker_remaining < maker_order.quantity {
+                            taker_remaining
+                        } else {
+                            maker_order.quantity
+                        };
+
+                        let trade_collateral = match_qty * (current_price as u64);
+                        let fee = (trade_collateral * FEE_BASIS_POINTS) / 10_000;
+                        let net_collateral = trade_collateral - fee;
+
+                        let s_idx = seat_idx.ok_or(ProgramError::InsufficientFunds)?;
+                        let taker_seat = &mut *seats_ptr.add(s_idx);
+
+                        if args.outcome == 0 {
+                            if taker_seat.ot_a_claimable < match_qty {
+                                return Err(ProgramError::InsufficientFunds);
+                            }
+                            taker_seat.ot_a_claimable -= match_qty;
+                            maker_seat.ot_a_claimable += match_qty;
+                        } else {
+                            if taker_seat.ot_b_claimable < match_qty {
+                                return Err(ProgramError::InsufficientFunds);
+                            }
+                            taker_seat.ot_b_claimable -= match_qty;
+                            maker_seat.ot_b_claimable += match_qty;
                         }
-                        taker_seat.ot_a_claimable -= match_qty;
-                    } else {
-                        if taker_seat.ot_b_claimable < match_qty {
-                            return Err(ProgramError::InsufficientFunds);
+
+                        maker_seat.collateral_locked -= trade_collateral;
+                        taker_mut.collateral_available += net_collateral;
+
+                        market_mut.accumulated_fees += fee;
+                        taker_remaining -= match_qty;
+                        maker_order.quantity -= match_qty;
+
+                        if maker_order.quantity == 0 {
+                            let next_head = maker_order.next_idx;
+                            maker_order.next_idx = view.header.next_free_node_idx;
+                            view.header.next_free_node_idx = level.head;
+
+                            level.head = next_head;
+                            if next_head == 0 {
+                                level.tail = 0;
+                            }
                         }
-                        taker_seat.ot_b_claimable -= match_qty;
                     }
-
-                    if args.outcome == 0 {
-                        maker_seat.ot_a_claimable += match_qty;
-                    } else {
-                        maker_seat.ot_b_claimable += match_qty;
-                    }
-
-                    maker_seat.collateral_locked -= trade_collateral;
-                    taker_mut.collateral_available += net_collateral;
                 }
+            } else {
+                for current_price in 1..=args.price as usize {
+                    if taker_remaining == 0 {
+                        break;
+                    }
 
-                market_mut.accumulated_fees += fee;
-                taker_remaining -= match_qty;
-                maker_order.quantity -= match_qty;
+                    let target_dir_index = 100 + current_price;
+                    let level = &mut view.directory[target_dir_index];
 
-                if maker_order.quantity == 0 {
-                    let next_head = maker_order.next_idx;
-                    maker_order.next_idx = view.header.next_free_node_idx;
-                    view.header.next_free_node_idx = level.head;
+                    while taker_remaining > 0 && level.head != 0 {
+                        let head_node_idx = level.head as usize;
+                        let maker_order = &mut view.orders[head_node_idx];
+                        let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
 
-                    level.head = next_head;
-                    if next_head == 0 {
-                        level.tail = 0;
+                        let match_qty = if taker_remaining < maker_order.quantity {
+                            taker_remaining
+                        } else {
+                            maker_order.quantity
+                        };
+
+                        let trade_collateral = match_qty * (current_price as u64);
+                        let fee = (trade_collateral * FEE_BASIS_POINTS) / 10_000;
+                        let net_collateral = trade_collateral - fee;
+
+                        if taker_mut.collateral_available < trade_collateral {
+                            return Err(ProgramError::InsufficientFunds);
+                        }
+
+                        maker_seat.collateral_claimable += net_collateral;
+                        taker_mut.collateral_available -= trade_collateral;
+
+                        let s_idx = seat_idx.unwrap();
+                        let taker_seat = &mut *seats_ptr.add(s_idx);
+                        if args.outcome == 0 {
+                            taker_seat.ot_a_claimable += match_qty;
+                        } else {
+                            taker_seat.ot_b_claimable += match_qty;
+                        }
+
+                        market_mut.accumulated_fees += fee;
+                        taker_remaining -= match_qty;
+                        maker_order.quantity -= match_qty;
+
+                        if maker_order.quantity == 0 {
+                            let next_head = maker_order.next_idx;
+                            maker_order.next_idx = view.header.next_free_node_idx;
+                            view.header.next_free_node_idx = level.head;
+
+                            level.head = next_head;
+                            if next_head == 0 {
+                                level.tail = 0;
+                            }
+                        }
                     }
                 }
             }

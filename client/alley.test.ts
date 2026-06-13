@@ -726,4 +726,124 @@ describe("Prediction Market tests", () => {
 
         console.log("✅ Verified: Orderbook populated with tiered Bids at 50, 48, and 45.");
     });
+
+    test("Execute Market Sell Order that walks and consumes multiple price tiers", () => {
+        const marketSeller = Keypair.generate();
+        svm.airdrop(marketSeller.publicKey, 2_000_000_000n);
+
+        const [sellerState, bumpSeller] = PublicKey.findProgramAddressSync(
+            [Buffer.from("user_state"), marketSeller.publicKey.toBuffer()],
+            PROGRAM_ID
+        );
+
+        const sellerStateBuffer = Buffer.alloc(41);
+        sellerStateBuffer.set(marketSeller.publicKey.toBuffer(), 0);
+        sellerStateBuffer.writeBigUInt64LE(10_000n, 32);
+        sellerStateBuffer.writeUInt8(bumpSeller, 40);
+
+        svm.setAccount(sellerState, {
+            lamports: Number(5_000_000n),
+            data: new Uint8Array(sellerStateBuffer),
+            owner: PROGRAM_ID,
+            executable: false,
+            rentEpoch: Number(0n)
+        });
+
+        const registerSeatData = Buffer.alloc(21);
+        registerSeatData.writeUInt8(5, 0);
+        registerSeatData.writeUInt8(0, 1);
+        registerSeatData.writeUInt8(0, 2);
+        registerSeatData.writeUInt8(0, 3);
+        registerSeatData.writeUInt8(1, 4);
+        registerSeatData.writeBigUInt64LE(1n, 5);
+        registerSeatData.writeBigUInt64LE(9999n, 13);
+
+        const registerTx = new Transaction().add(new TransactionInstruction({
+            keys: [
+                { pubkey: marketSeller.publicKey, isSigner: true, isWritable: true },
+                { pubkey: market_pda, isSigner: false, isWritable: true },
+                { pubkey: sellerState, isSigner: false, isWritable: true },
+                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
+            ],
+            programId: PROGRAM_ID,
+            data: registerSeatData
+        }));
+        registerTx.recentBlockhash = svm.latestBlockhash();
+        registerTx.feePayer = marketSeller.publicKey;
+        registerTx.sign(marketSeller);
+        expect(svm.sendTransaction(registerTx) instanceof FailedTransactionMetadata).toBe(false);
+
+        const account = svm.getAccount(sharedOrderbookA.publicKey)!;
+        const mutableBuffer = Buffer.from(account.data);
+
+        const seatsArrayOffset = 44 + 1600;
+        const tempView = new DataView(account.data.buffer, account.data.byteOffset, account.data.byteLength);
+        const totalAllocatedSeats = tempView.getUint32(32, true);
+
+        let targetSeatIndex = -1;
+        for (let i = 0; i < totalAllocatedSeats; i++) {
+            const seatKeyBytes = mutableBuffer.subarray(seatsArrayOffset + (i * 80), seatsArrayOffset + (i * 80) + 32);
+            if (PublicKey.prototype.equals.call(new PublicKey(seatKeyBytes), marketSeller.publicKey)) {
+                targetSeatIndex = i;
+                break;
+            }
+        }
+
+        expect(targetSeatIndex).not.toBe(-1);
+
+        const targetOtAClaimableOffset = seatsArrayOffset + (targetSeatIndex * 80) + 64;
+        tempView.setBigUint64(targetOtAClaimableOffset, 5_000_000n, true);
+
+        svm.setAccount(sharedOrderbookA.publicKey, account);
+
+        const marketOrderData = Buffer.alloc(21);
+        marketOrderData.writeUInt8(5, 0);
+        marketOrderData.writeUInt8(0, 1);
+        marketOrderData.writeUInt8(1, 2);
+        marketOrderData.writeUInt8(1, 3);
+        marketOrderData.writeUInt8(45, 4);
+        marketOrderData.writeBigUInt64LE(2_500_000n, 5);
+        marketOrderData.writeBigUInt64LE(5001n, 13);
+
+        const marketTx = new Transaction().add(new TransactionInstruction({
+            keys: [
+                { pubkey: marketSeller.publicKey, isSigner: true, isWritable: true },
+                { pubkey: market_pda, isSigner: false, isWritable: true },
+                { pubkey: sellerState, isSigner: false, isWritable: true },
+                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
+            ],
+            programId: PROGRAM_ID,
+            data: marketOrderData
+        }));
+        marketTx.recentBlockhash = svm.latestBlockhash();
+        marketTx.feePayer = marketSeller.publicKey;
+        marketTx.sign(marketSeller);
+
+        const txResult = svm.sendTransaction(marketTx);
+        if (txResult instanceof FailedTransactionMetadata) {
+            console.error("========== MARKET ORDER EXECUTION FAILED ===========");
+            console.error("Error details: ", txResult.err().toString());
+            const metadata = txResult.meta();
+            if (metadata) {
+                console.error("Program logs:\n", metadata.prettyLogs());
+            }
+            console.log("=================================================");
+        }
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const freshBook = svm.getAccount(sharedOrderbookA.publicKey)!;
+        const freshBuffer = Buffer.from(freshBook.data);
+
+        const bidLevel50Head = freshBuffer.readUInt32LE(44 + (50 * 8));
+        expect(bidLevel50Head).toBe(0);
+
+        const bidLevel48Head = freshBuffer.readUInt32LE(44 + (48 * 8));
+        expect(bidLevel48Head).not.toBe(0);
+
+        const nodeDataOffset = 44 + 1600 + (1024 * 80) + (bidLevel48Head * 32);
+        const remainingQtyOnLevel48 = freshBuffer.readBigUInt64LE(nodeDataOffset + 8);
+        expect(remainingQtyOnLevel48).toBe(500_000n);
+
+        console.log(`✅ Verified: Market order successfully consumed Level 50 and partially cleared Level 48.`);
+    });
 });
