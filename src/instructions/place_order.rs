@@ -207,6 +207,7 @@ pub fn process_place_order(
                     }
                 }
             } else {
+                // counter_side == 1
                 for current_price in 1..=args.price as usize {
                     if taker_remaining == 0 {
                         break;
