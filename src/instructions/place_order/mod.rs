@@ -34,7 +34,6 @@ pub fn process_place_order(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // 1. AUTO-INITIALIZATION: Instantiate MarketUserState if it does not exist yet
     if market_user_state.data_len() == 0 {
         let bump_slice = [args.bump_market_user];
         let pda_signer_seeds = [
