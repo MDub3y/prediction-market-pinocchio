@@ -66,6 +66,28 @@ impl PlatformUserState {
 }
 
 #[repr(C)]
+pub struct MarketUserState {
+    pub wallet: Address,
+    pub market_pda: Address,
+    pub platform_user_state: Address,
+    pub ot_a_balance: u64,
+    pub ot_b_balance: u64,
+    pub collateral_claimable: u64,
+    pub bump: u8,
+    pub padding: [u8; 7],
+}
+
+impl MarketUserState {
+    pub const LEN: usize = 129;
+    pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
+        Ok(unsafe { &*(bytes.as_ptr() as *const Self) })
+    }
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct PriceLevel {
     pub head: u32,
@@ -84,16 +106,10 @@ pub struct OrderNode {
 #[repr(C)]
 #[derive(Clone, Default)]
 pub struct TraderSeat {
-    pub wallet: Address,
+    pub market_user_state: Address,
     pub collateral_locked: u64,
     pub ot_a_locked: u64,
     pub ot_b_locked: u64,
-    pub collateral_claimable: u64,
-    pub ot_a_claimable: u64,
-    pub ot_b_claimable: u64,
-    /* pub total_volume_traded: u64,
-    pub successful_trades_count: u32,
-    pub padding: [u8; 4], */
 }
 
 #[repr(C)]
@@ -238,7 +254,8 @@ impl DepositCollateralArgs {
     }
 }
 
-#[repr(C)]
+// all kinds of orders will be resolved through place_order
+/* #[repr(C)]
 pub struct SplitTokensArgs {
     pub amount: u64,
 }
@@ -270,20 +287,21 @@ impl MergeTokensArgs {
             amount: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
         })
     }
-}
+} */
 
 #[repr(C)]
 pub struct PlaceOrderArgs {
     pub outcome: u8,
     pub side: u8,
-    pub order_type: u8,
+    pub order_type: u8, // 0 = Limit, 1 = Market, 2 = Split, 3 = Merge
     pub price: u8,
     pub quantity: u64,
     pub order_id: u64,
+    pub bump_market_user: u8, // passed dynamically from client layout
 }
 
 impl PlaceOrderArgs {
-    pub const LEN: usize = 20;
+    pub const LEN: usize = 21;
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
@@ -295,6 +313,7 @@ impl PlaceOrderArgs {
             price: bytes[3],
             quantity: u64::from_le_bytes(bytes[4..12].try_into().unwrap()),
             order_id: u64::from_le_bytes(bytes[12..20].try_into().unwrap()),
+            bump_market_user: bytes[20],
         })
     }
 }
