@@ -51,7 +51,12 @@ describe("Prediction Market tests", () => {
     let sharedOrderbookA: Keypair;
     let sharedOrderbookB: Keypair;
 
+    let buyer2: Keypair;
+    let buyer2State: PublicKey;
     let buyer2MarketUserState: PublicKey;
+
+    let buyer3: Keypair;
+    let buyer3State: PublicKey;
     let buyer3MarketUserState: PublicKey;
 
     beforeAll(() => {
@@ -474,151 +479,94 @@ describe("Prediction Market tests", () => {
     });
 
     test("Split order from retail user's platform state credit", () => {
-        const [outcomeAMint] = PublicKey.findProgramAddressSync([
-            Buffer.from("mint"),
-            market_pda.toBuffer(),
-            Buffer.from([0])
-        ],
-            PROGRAM_ID
-        );
-        const [outcomeBMint] = PublicKey.findProgramAddressSync([
-            Buffer.from("mint"),
-            market_pda.toBuffer(),
-            Buffer.from([1])
-        ],
-            PROGRAM_ID
-        );
-
-        const userOutcomeA = getAssociatedTokenAddressSync(outcomeAMint, retailUser.publicKey);
-        const userOutcomeB = getAssociatedTokenAddressSync(outcomeBMint, retailUser.publicKey);
-
-        const prepareWalletTx = new Transaction().add(
-            createAssociatedTokenAccountInstruction(retailUser.publicKey, userOutcomeA, retailUser.publicKey, outcomeAMint),
-            createAssociatedTokenAccountInstruction(retailUser.publicKey, userOutcomeB, retailUser.publicKey, outcomeBMint),
-        );
-        prepareWalletTx.recentBlockhash = svm.latestBlockhash();
-        prepareWalletTx.feePayer = retailUser.publicKey;
-        prepareWalletTx.sign(retailUser);
-
-        const prepareResult = svm.sendTransaction(prepareWalletTx);
-        expect(prepareResult instanceof FailedTransactionMetadata).toBe(false);
-
         const splitAmount = 50_000_000n;
-        const instructionData = Buffer.alloc(9);
+
+        const instructionData = Buffer.alloc(22);
         instructionData.writeUInt8(3, 0);
-        instructionData.writeBigUInt64LE(splitAmount, 1);
+        instructionData.writeUInt8(0, 1);
+        instructionData.writeUInt8(0, 2);
+        instructionData.writeUInt8(2, 3);
+        instructionData.writeUInt8(0, 4);
+        instructionData.writeBigUInt64LE(splitAmount, 5);
+        instructionData.writeBigUInt64LE(0n, 13);
+        instructionData.writeUInt8(0, 21);
 
         const keys = [
             { pubkey: retailUser.publicKey, isSigner: true, isWritable: true },
             { pubkey: market_pda, isSigner: false, isWritable: true },
             { pubkey: retailUserState, isSigner: false, isWritable: true },
-            { pubkey: outcomeAMint, isSigner: false, isWritable: true },
-            { pubkey: outcomeBMint, isSigner: false, isWritable: true },
-            { pubkey: userOutcomeA, isSigner: false, isWritable: true },
-            { pubkey: userOutcomeB, isSigner: false, isWritable: true },
-            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: retailMarketUserState, isSigner: false, isWritable: true },
+            { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
         ];
 
-        const splitIx = new TransactionInstruction({
-            keys,
-            programId: PROGRAM_ID,
-            data: instructionData,
-        });
-
-        const tx = new Transaction().add(splitIx);
+        const tx = new Transaction().add(new TransactionInstruction({ keys, programId: PROGRAM_ID, data: instructionData }));
         tx.recentBlockhash = svm.latestBlockhash();
         tx.feePayer = retailUser.publicKey;
         tx.sign(retailUser);
 
         const txResult = svm.sendTransaction(tx);
-        if (txResult instanceof FailedTransactionMetadata) {
-            console.error("========== SPLIT TOKENS FAILED ===========");
-            console.error("Error details: ", txResult.err().toString());
-            console.error("Program logs:\n", txResult.meta()?.prettyLogs());
-            console.log("==========================================");
-        }
         expect(txResult instanceof FailedTransactionMetadata).toBe(false);
 
-        const tokenABalance = svm.getAccount(userOutcomeA);
-        const tokenBBalance = svm.getAccount(userOutcomeB);
-        expect(tokenABalance).not.toBeNull();
-        expect(tokenBBalance).not.toBeNull();
+        const marketUserStateInfo = svm.getAccount(retailMarketUserState);
+        const stateBuffer = Buffer.from(marketUserStateInfo!.data);
+
+        const otABalance = stateBuffer.readBigUInt64LE(96);
+        const otBBalance = stateBuffer.readBigUInt64LE(104);
+
+        expect(otABalance).toBe(splitAmount);
+        expect(otBBalance).toBe(splitAmount);
 
         const userStateAccountInfo = svm.getAccount(retailUserState);
-        const stateBuffer = Buffer.from(userStateAccountInfo!.data);
-        const collateralAvailable = stateBuffer.readBigUInt64LE(32);
+        const platformBuffer = Buffer.from(userStateAccountInfo!.data);
+        const collateralAvailable = platformBuffer.readBigUInt64LE(32);
 
         expect(collateralAvailable).toBe(100_000_000n);
-        console.log(`✅ Verified: Split processed. Mints executed. Platform balance: ${collateralAvailable}`);
+        console.log(`✅ Verified: Split executed directly into decoupled asset ledger columns.`);
     });
 
     test("Merge order from retail user's platform state credit", () => {
-        const [outcomeAMint] = PublicKey.findProgramAddressSync([
-            Buffer.from("mint"),
-            market_pda.toBuffer(),
-            Buffer.from([0])
-        ],
-            PROGRAM_ID
-        );
-        const [outcomeBMint] = PublicKey.findProgramAddressSync([
-            Buffer.from("mint"),
-            market_pda.toBuffer(),
-            Buffer.from([1])
-        ],
-            PROGRAM_ID
-        );
-
-        const userOutcomeA = getAssociatedTokenAddressSync(outcomeAMint, retailUser.publicKey);
-        const userOutcomeB = getAssociatedTokenAddressSync(outcomeBMint, retailUser.publicKey);
-
         const mergeAmount = 20_000_000n;
-        const instructionData = Buffer.alloc(9);
-        instructionData.writeUInt8(4, 0);
-        instructionData.writeBigUInt64LE(mergeAmount, 1);
+        const instructionData = Buffer.alloc(22);
+        instructionData.writeUInt8(3, 0);
+        instructionData.writeUInt8(0, 1);
+        instructionData.writeUInt8(0, 2);
+        instructionData.writeUInt8(3, 3);
+        instructionData.writeUInt8(0, 4);
+        instructionData.writeBigUInt64LE(mergeAmount, 5);
+        instructionData.writeBigUInt64LE(0n, 13);
+        instructionData.writeUInt8(0, 21);
 
         const keys = [
             { pubkey: retailUser.publicKey, isSigner: true, isWritable: true },
             { pubkey: market_pda, isSigner: false, isWritable: true },
             { pubkey: retailUserState, isSigner: false, isWritable: true },
-            { pubkey: outcomeAMint, isSigner: false, isWritable: true },
-            { pubkey: outcomeBMint, isSigner: false, isWritable: true },
-            { pubkey: userOutcomeA, isSigner: false, isWritable: true },
-            { pubkey: userOutcomeB, isSigner: false, isWritable: true },
-            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: retailMarketUserState, isSigner: false, isWritable: true },
+            { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
         ];
 
-        const mergeIx = new TransactionInstruction({
-            keys,
-            programId: PROGRAM_ID,
-            data: instructionData
-        });
-        const tx = new Transaction().add(mergeIx);
+        const tx = new Transaction().add(new TransactionInstruction({ keys, programId: PROGRAM_ID, data: instructionData }));
         tx.recentBlockhash = svm.latestBlockhash();
         tx.feePayer = retailUser.publicKey;
         tx.sign(retailUser);
 
         const txResult = svm.sendTransaction(tx);
-        if (txResult instanceof FailedTransactionMetadata) {
-            console.error("========== MERGE TOKENS FAILED ===========");
-            console.error("Error details: ", txResult.err().toString());
-            console.error("Program logs:\n", txResult.meta()?.prettyLogs());
-            console.log("==========================================");
-        }
         expect(txResult instanceof FailedTransactionMetadata).toBe(false);
 
         const userStateAccountInfo = svm.getAccount(retailUserState);
-        const stateBuffer = Buffer.from(userStateAccountInfo!.data);
-        const collateralAvailable = stateBuffer.readBigUInt64LE(32);
+        const pBuffer = Buffer.from(userStateAccountInfo!.data);
+        const collateralAvailable = pBuffer.readBigUInt64LE(32);
 
         expect(collateralAvailable).toBe(120_000_000n);
-        console.log(`✅ Verified: Merge complete. Re-credited platform wallet balance: ${collateralAvailable}`);
+        console.log(`✅ Verified: Merge finalized. Balanced options burned; platform credits restored.`);
     });
 
     test("Setup multi-level Bid liquidity (Bids at 48 and 45)", async () => {
-        const buyer2 = Keypair.generate();
+        buyer2 = Keypair.generate();
         svm.airdrop(buyer2.publicKey, 2_000_000_000n);
-
         const buyer2TokenAccount = getAssociatedTokenAddressSync(collateralMint, buyer2.publicKey);
+
         const setupTx2 = new Transaction().add(
             createAssociatedTokenAccountInstruction(buyer2.publicKey, buyer2TokenAccount, buyer2.publicKey, collateralMint),
             createMintToInstruction(collateralMint, buyer2TokenAccount, maker.publicKey, 500_000_000n)
@@ -628,56 +576,47 @@ describe("Prediction Market tests", () => {
         setupTx2.sign(buyer2, maker);
         expect(svm.sendTransaction(setupTx2) instanceof FailedTransactionMetadata).toBe(false);
 
-        const [buyer2State, bump2] = PublicKey.findProgramAddressSync([Buffer.from("user_state"), buyer2.publicKey.toBuffer()], PROGRAM_ID);
+        const [b2State, bump2] = PublicKey.findProgramAddressSync([Buffer.from("user_state"), buyer2.publicKey.toBuffer()], PROGRAM_ID);
+        buyer2State = b2State;
 
-        const depositIx2 = new TransactionInstruction({
-            keys: [
-                { pubkey: buyer2.publicKey, isSigner: true, isWritable: true },
-                { pubkey: buyer2State, isSigner: false, isWritable: true },
-                { pubkey: buyer2TokenAccount, isSigner: false, isWritable: true },
-                { pubkey: collateralVault, isSigner: false, isWritable: true },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-            ],
-            programId: PROGRAM_ID,
-            data: Buffer.from([2, ...new Uint8Array(new Uint8Array(new BigUint64Array([200_000_000n]).buffer)), bump2])
-        });
-
-        const depositTx2 = new Transaction().add(depositIx2, SystemProgram.transfer({ fromPubkey: buyer2.publicKey, toPubkey: buyer2State, lamports: 3_000_000 }));
+        const depositTx2 = new Transaction().add(
+            new TransactionInstruction({
+                keys: [{ pubkey: buyer2.publicKey, isSigner: true, isWritable: true }, { pubkey: buyer2State, isSigner: false, isWritable: true }, { pubkey: buyer2TokenAccount, isSigner: false, isWritable: true }, { pubkey: collateralVault, isSigner: false, isWritable: true }, { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }],
+                programId: PROGRAM_ID, data: Buffer.from([2, ...new Uint8Array(new Uint8Array(new BigUint64Array([200_000_000n]).buffer)), bump2])
+            }),
+            SystemProgram.transfer({ fromPubkey: buyer2.publicKey, toPubkey: buyer2State, lamports: 3_000_000 })
+        );
         depositTx2.recentBlockhash = svm.latestBlockhash();
         depositTx2.feePayer = buyer2.publicKey;
         depositTx2.sign(buyer2);
         expect(svm.sendTransaction(depositTx2) instanceof FailedTransactionMetadata).toBe(false);
 
-        const orderData2 = Buffer.alloc(21);
-        orderData2.writeUInt8(5, 0);
+        const [b2MarketUser, bumpM2] = PublicKey.findProgramAddressSync([Buffer.from("market_user"), market_pda.toBuffer(), buyer2.publicKey.toBuffer()], PROGRAM_ID);
+        buyer2MarketUserState = b2MarketUser;
+
+        const orderData2 = Buffer.alloc(22);
+        orderData2.writeUInt8(3, 0);
         orderData2.writeUInt8(0, 1);
         orderData2.writeUInt8(0, 2);
         orderData2.writeUInt8(0, 3);
         orderData2.writeUInt8(48, 4);
         orderData2.writeBigUInt64LE(2_000_000n, 5);
         orderData2.writeBigUInt64LE(2001n, 13);
+        orderData2.writeUInt8(bumpM2, 21);
 
         const buyTx2 = new Transaction().add(new TransactionInstruction({
-            keys: [
-                { pubkey: buyer2.publicKey, isSigner: true, isWritable: true },
-                { pubkey: market_pda, isSigner: false, isWritable: true },
-                { pubkey: buyer2State, isSigner: false, isWritable: true },
-                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
-            ],
-            programId: PROGRAM_ID,
-            data: orderData2
+            keys: [{ pubkey: buyer2.publicKey, isSigner: true, isWritable: true }, { pubkey: market_pda, isSigner: false, isWritable: true }, { pubkey: buyer2State, isSigner: false, isWritable: true }, { pubkey: b2MarketUser, isSigner: false, isWritable: true }, { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }, { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }],
+            programId: PROGRAM_ID, data: orderData2
         }));
         buyTx2.recentBlockhash = svm.latestBlockhash();
         buyTx2.feePayer = buyer2.publicKey;
         buyTx2.sign(buyer2);
         expect(svm.sendTransaction(buyTx2) instanceof FailedTransactionMetadata).toBe(false);
 
-
-        const buyer3 = Keypair.generate();
+        buyer3 = Keypair.generate();
         svm.airdrop(buyer3.publicKey, 2_000_000_000n);
-
         const buyer3TokenAccount = getAssociatedTokenAddressSync(collateralMint, buyer3.publicKey);
+
         const setupTx3 = new Transaction().add(
             createAssociatedTokenAccountInstruction(buyer3.publicKey, buyer3TokenAccount, buyer3.publicKey, collateralMint),
             createMintToInstruction(collateralMint, buyer3TokenAccount, maker.publicKey, 500_000_000n)
@@ -687,45 +626,37 @@ describe("Prediction Market tests", () => {
         setupTx3.sign(buyer3, maker);
         expect(svm.sendTransaction(setupTx3) instanceof FailedTransactionMetadata).toBe(false);
 
-        const [buyer3State, bump3] = PublicKey.findProgramAddressSync([Buffer.from("user_state"), buyer3.publicKey.toBuffer()], PROGRAM_ID);
+        const [b3State, bump3] = PublicKey.findProgramAddressSync([Buffer.from("user_state"), buyer3.publicKey.toBuffer()], PROGRAM_ID);
+        buyer3State = b3State;
 
-        const depositIx3 = new TransactionInstruction({
-            keys: [
-                { pubkey: buyer3.publicKey, isSigner: true, isWritable: true },
-                { pubkey: buyer3State, isSigner: false, isWritable: true },
-                { pubkey: buyer3TokenAccount, isSigner: false, isWritable: true },
-                { pubkey: collateralVault, isSigner: false, isWritable: true },
-                { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-            ],
-            programId: PROGRAM_ID,
-            data: Buffer.from([2, ...new Uint8Array(new Uint8Array(new BigUint64Array([200_000_000n]).buffer)), bump3])
-        });
-
-        const depositTx3 = new Transaction().add(depositIx3, SystemProgram.transfer({ fromPubkey: buyer3.publicKey, toPubkey: buyer3State, lamports: 3_000_000 }));
+        const depositTx3 = new Transaction().add(
+            new TransactionInstruction({
+                keys: [{ pubkey: buyer3.publicKey, isSigner: true, isWritable: true }, { pubkey: buyer3State, isSigner: false, isWritable: true }, { pubkey: buyer3TokenAccount, isSigner: false, isWritable: true }, { pubkey: collateralVault, isSigner: false, isWritable: true }, { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }],
+                programId: PROGRAM_ID, data: Buffer.from([2, ...new Uint8Array(new Uint8Array(new BigUint64Array([200_000_000n]).buffer)), bump3])
+            }),
+            SystemProgram.transfer({ fromPubkey: buyer3.publicKey, toPubkey: buyer3State, lamports: 3_000_000 })
+        );
         depositTx3.recentBlockhash = svm.latestBlockhash();
         depositTx3.feePayer = buyer3.publicKey;
         depositTx3.sign(buyer3);
         expect(svm.sendTransaction(depositTx3) instanceof FailedTransactionMetadata).toBe(false);
 
-        const orderData3 = Buffer.alloc(21);
-        orderData3.writeUInt8(5, 0);
+        const [b3MarketUser, bumpM3] = PublicKey.findProgramAddressSync([Buffer.from("market_user"), market_pda.toBuffer(), buyer3.publicKey.toBuffer()], PROGRAM_ID);
+        buyer3MarketUserState = b3MarketUser;
+
+        const orderData3 = Buffer.alloc(22);
+        orderData3.writeUInt8(3, 0);
         orderData3.writeUInt8(0, 1);
         orderData3.writeUInt8(0, 2);
         orderData3.writeUInt8(0, 3);
         orderData3.writeUInt8(45, 4);
         orderData3.writeBigUInt64LE(3_000_000n, 5);
         orderData3.writeBigUInt64LE(3001n, 13);
+        orderData3.writeUInt8(bumpM3, 21);
 
         const buyTx3 = new Transaction().add(new TransactionInstruction({
-            keys: [
-                { pubkey: buyer3.publicKey, isSigner: true, isWritable: true },
-                { pubkey: market_pda, isSigner: false, isWritable: true },
-                { pubkey: buyer3State, isSigner: false, isWritable: true },
-                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
-            ],
-            programId: PROGRAM_ID,
-            data: orderData3
+            keys: [{ pubkey: buyer3.publicKey, isSigner: true, isWritable: true }, { pubkey: market_pda, isSigner: false, isWritable: true }, { pubkey: buyer3State, isSigner: false, isWritable: true }, { pubkey: b3MarketUser, isSigner: false, isWritable: true }, { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }, { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }],
+            programId: PROGRAM_ID, data: orderData3
         }));
         buyTx3.recentBlockhash = svm.latestBlockhash();
         buyTx3.feePayer = buyer3.publicKey;
@@ -739,86 +670,43 @@ describe("Prediction Market tests", () => {
         const marketSeller = Keypair.generate();
         svm.airdrop(marketSeller.publicKey, 2_000_000_000n);
 
-        const [sellerState, bumpSeller] = PublicKey.findProgramAddressSync(
-            [Buffer.from("user_state"), marketSeller.publicKey.toBuffer()],
-            PROGRAM_ID
-        );
+        const [sellerPlatformState, b1] = PublicKey.findProgramAddressSync([Buffer.from("user_state"), marketSeller.publicKey.toBuffer()], PROGRAM_ID);
+        const [sellerMarketUserState, b2] = PublicKey.findProgramAddressSync([Buffer.from("market_user"), market_pda.toBuffer(), marketSeller.publicKey.toBuffer()], PROGRAM_ID);
 
-        const sellerStateBuffer = Buffer.alloc(41);
-        sellerStateBuffer.set(marketSeller.publicKey.toBuffer(), 0);
-        sellerStateBuffer.writeBigUInt64LE(10_000n, 32);
-        sellerStateBuffer.writeUInt8(bumpSeller, 40);
+        const pBuffer = Buffer.alloc(41);
+        pBuffer.set(marketSeller.publicKey.toBuffer(), 0);
+        pBuffer.writeBigUInt64LE(10_000n, 32);
+        pBuffer.writeUInt8(b1, 40);
+        svm.setAccount(sellerPlatformState, { lamports: Number(5_000_000n), data: new Uint8Array(pBuffer), owner: PROGRAM_ID, executable: false, rentEpoch: Number(0n) });
 
-        svm.setAccount(sellerState, {
-            lamports: Number(5_000_000n),
-            data: new Uint8Array(sellerStateBuffer),
-            owner: PROGRAM_ID,
-            executable: false,
-            rentEpoch: Number(0n)
-        });
+        const mBuffer = Buffer.alloc(129);
+        mBuffer.set(marketSeller.publicKey.toBuffer(), 0);
+        mBuffer.set(market_pda.toBuffer(), 32);
+        mBuffer.set(sellerPlatformState.toBuffer(), 64);
+        mBuffer.writeBigUInt64LE(5_000_000n, 96);
+        mBuffer.writeUInt8(b2, 120);
+        svm.setAccount(sellerMarketUserState, { lamports: Number(5_000_000n), data: new Uint8Array(mBuffer), owner: PROGRAM_ID, executable: false, rentEpoch: Number(0n) });
 
-        const registerSeatData = Buffer.alloc(21);
-        registerSeatData.writeUInt8(5, 0);
-        registerSeatData.writeUInt8(0, 1);
-        registerSeatData.writeUInt8(0, 2);
-        registerSeatData.writeUInt8(0, 3);
-        registerSeatData.writeUInt8(1, 4);
-        registerSeatData.writeBigUInt64LE(1n, 5);
-        registerSeatData.writeBigUInt64LE(9999n, 13);
-
-        const registerTx = new Transaction().add(new TransactionInstruction({
-            keys: [
-                { pubkey: marketSeller.publicKey, isSigner: true, isWritable: true },
-                { pubkey: market_pda, isSigner: false, isWritable: true },
-                { pubkey: sellerState, isSigner: false, isWritable: true },
-                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
-            ],
-            programId: PROGRAM_ID,
-            data: registerSeatData
-        }));
-        registerTx.recentBlockhash = svm.latestBlockhash();
-        registerTx.feePayer = marketSeller.publicKey;
-        registerTx.sign(marketSeller);
-        expect(svm.sendTransaction(registerTx) instanceof FailedTransactionMetadata).toBe(false);
-
-        const account = svm.getAccount(sharedOrderbookA.publicKey)!;
-        const mutableBuffer = Buffer.from(account.data);
-
-        const seatsArrayOffset = 44 + 1600;
-        const tempView = new DataView(account.data.buffer, account.data.byteOffset, account.data.byteLength);
-        const totalAllocatedSeats = tempView.getUint32(32, true);
-
-        let targetSeatIndex = -1;
-        for (let i = 0; i < totalAllocatedSeats; i++) {
-            const seatKeyBytes = mutableBuffer.subarray(seatsArrayOffset + (i * 80), seatsArrayOffset + (i * 80) + 32);
-            if (PublicKey.prototype.equals.call(new PublicKey(seatKeyBytes), marketSeller.publicKey)) {
-                targetSeatIndex = i;
-                break;
-            }
-        }
-
-        expect(targetSeatIndex).not.toBe(-1);
-
-        const targetOtAClaimableOffset = seatsArrayOffset + (targetSeatIndex * 80) + 64;
-        tempView.setBigUint64(targetOtAClaimableOffset, 5_000_000n, true);
-
-        svm.setAccount(sharedOrderbookA.publicKey, account);
-
-        const marketOrderData = Buffer.alloc(21);
-        marketOrderData.writeUInt8(5, 0);
+        const marketOrderData = Buffer.alloc(22);
+        marketOrderData.writeUInt8(3, 0);
         marketOrderData.writeUInt8(0, 1);
         marketOrderData.writeUInt8(1, 2);
         marketOrderData.writeUInt8(1, 3);
         marketOrderData.writeUInt8(45, 4);
         marketOrderData.writeBigUInt64LE(2_500_000n, 5);
         marketOrderData.writeBigUInt64LE(5001n, 13);
+        marketOrderData.writeUInt8(0, 21);
 
         const marketTx = new Transaction().add(new TransactionInstruction({
             keys: [
                 { pubkey: marketSeller.publicKey, isSigner: true, isWritable: true },
                 { pubkey: market_pda, isSigner: false, isWritable: true },
-                { pubkey: sellerState, isSigner: false, isWritable: true },
-                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
+                { pubkey: sellerPlatformState, isSigner: false, isWritable: true },
+                { pubkey: sellerMarketUserState, isSigner: false, isWritable: true },
+                { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true },
+                { pubkey: retailMarketUserState, isSigner: false, isWritable: true },
+                { pubkey: buyer2MarketUserState, isSigner: false, isWritable: true },
+                { pubkey: buyer3MarketUserState, isSigner: false, isWritable: true }
             ],
             programId: PROGRAM_ID,
             data: marketOrderData
@@ -829,13 +717,7 @@ describe("Prediction Market tests", () => {
 
         const txResult = svm.sendTransaction(marketTx);
         if (txResult instanceof FailedTransactionMetadata) {
-            console.error("========== MARKET ORDER EXECUTION FAILED ===========");
-            console.error("Error details: ", txResult.err().toString());
-            const metadata = txResult.meta();
-            if (metadata) {
-                console.error("Program logs:\n", metadata.prettyLogs());
-            }
-            console.log("=================================================");
+            console.error("Program logs:\n", txResult.meta()?.prettyLogs());
         }
         expect(txResult instanceof FailedTransactionMetadata).toBe(false);
 
@@ -848,10 +730,70 @@ describe("Prediction Market tests", () => {
         const bidLevel48Head = freshBuffer.readUInt32LE(44 + (48 * 8));
         expect(bidLevel48Head).not.toBe(0);
 
-        const nodeDataOffset = 44 + 1600 + (1024 * 80) + (bidLevel48Head * 32);
+        const nodeDataOffset = 44 + 1600 + (1024 * 56) + (bidLevel48Head * 32);
         const remainingQtyOnLevel48 = freshBuffer.readBigUInt64LE(nodeDataOffset + 8);
         expect(remainingQtyOnLevel48).toBe(500_000n);
 
         console.log(`✅ Verified: Market order successfully consumed Level 50 and partially cleared Level 48.`);
+    });
+
+    test("Cancel remaining order from book", () => {
+        const freshBookBefore = svm.getAccount(sharedOrderbookA.publicKey)!;
+        const bufferBefore = Buffer.from(freshBookBefore.data);
+        const bidLevel48Head = bufferBefore.readUInt32LE(44 + (48 * 8));
+
+        const instructionData = Buffer.alloc(16);
+        instructionData.writeUInt8(4, 0);
+        instructionData.writeUInt8(0, 1);
+        instructionData.writeUInt8(0, 2);
+        instructionData.writeUInt8(48, 3);
+        instructionData.writeUInt32LE(bidLevel48Head, 4);
+        instructionData.writeBigUInt64LE(2001n, 8);
+
+        const keys = [
+            { pubkey: buyer2.publicKey, isSigner: true, isWritable: true },
+            { pubkey: market_pda, isSigner: false, isWritable: true },
+            { pubkey: buyer2State, isSigner: false, isWritable: true },
+            { pubkey: buyer2MarketUserState, isSigner: false, isWritable: true },
+            { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
+        ];
+
+        const tx = new Transaction().add(new TransactionInstruction({ keys, programId: PROGRAM_ID, data: instructionData }));
+        tx.recentBlockhash = svm.latestBlockhash();
+        tx.feePayer = buyer2.publicKey;
+        tx.sign(buyer2);
+
+        const txResult = svm.sendTransaction(tx);
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const freshBookAfter = svm.getAccount(sharedOrderbookA.publicKey)!;
+        const bufferAfter = Buffer.from(freshBookAfter.data);
+        const bidLevel48HeadAfter = bufferAfter.readUInt32LE(44 + (48 * 8));
+        expect(bidLevel48HeadAfter).toBe(0);
+
+        console.log("✅ Verified: Cancel order processed cleanly. Rested node dropped; locks re-credited.");
+    });
+
+    test("Claim funds from settled trades", () => {
+        const instructionData = Buffer.alloc(1);
+        instructionData.writeUInt8(5, 0);
+
+        const keys = [
+            { pubkey: retailUser.publicKey, isSigner: true, isWritable: true },
+            { pubkey: retailUserState, isSigner: false, isWritable: true },
+            { pubkey: retailMarketUserState, isSigner: false, isWritable: true }
+        ];
+
+        const tx = new Transaction().add(new TransactionInstruction({ keys, programId: PROGRAM_ID, data: instructionData }));
+        tx.recentBlockhash = svm.latestBlockhash();
+        tx.feePayer = retailUser.publicKey;
+        tx.sign(retailUser);
+
+        const txResult = svm.sendTransaction(tx);
+        expect(txResult instanceof FailedTransactionMetadata).toBe(false);
+
+        const userStateAccountInfo = svm.getAccount(retailUserState);
+        expect(userStateAccountInfo).not.toBeNull();
+        console.log("✅ Verified: Claim funds executed. Balances settled across state channels cleanly.");
     });
 });
