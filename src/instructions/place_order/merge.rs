@@ -10,7 +10,7 @@ pub fn execute_merge_operation(
     };
 
     unsafe {
-        let mut m_data = market_user_state.borrow_unchecked_mut();
+        let m_data = market_user_state.borrow_unchecked_mut();
         let market_user = &mut *(m_data.as_mut_ptr() as *mut MarketUserState);
         if market_user.ot_a_balance < args.quantity || market_user.ot_b_balance < args.quantity {
             return Err(ProgramError::InsufficientFunds);
@@ -20,7 +20,7 @@ pub fn execute_merge_operation(
     }
 
     unsafe {
-        let mut p_data = platform_user_state.borrow_unchecked_mut();
+        let p_data = platform_user_state.borrow_unchecked_mut();
         let platform_state = &mut *(p_data.as_mut_ptr() as *mut PlatformUserState);
         platform_state.collateral_available += args.quantity;
     }

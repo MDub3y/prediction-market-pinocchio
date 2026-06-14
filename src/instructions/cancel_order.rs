@@ -1,4 +1,6 @@
-use crate::state::{CancelOrderArgs, MarketState, MarketTier, OrderBookView, PlatformUserState};
+use crate::state::{
+    CancelOrderArgs, MarketState, MarketTier, MarketUserState, OrderBookView, PlatformUserState,
+};
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 pub fn process_cancel_order(
@@ -6,7 +8,15 @@ pub fn process_cancel_order(
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let [user, market_pda, platform_user_state, orderbook, ..] = accounts else {
+    let [
+        user,
+        market_pda,
+        platform_user_state,
+        market_user_state,
+        orderbook,
+        ..,
+    ] = accounts
+    else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -15,11 +25,13 @@ pub fn process_cancel_order(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    if platform_user_state.data_len() < PlatformUserState::LEN {
+    if platform_user_state.data_len() < PlatformUserState::LEN
+        || market_user_state.data_len() < MarketUserState::LEN
+    {
         return Err(ProgramError::InvalidAccountData);
     }
 
-    let state_bump = unsafe {
+    let platform_bump = unsafe {
         let user_data = platform_user_state.borrow_unchecked();
         let state = PlatformUserState::from_bytes(&user_data)?;
         if state.wallet != *user.address() {
@@ -27,13 +39,38 @@ pub fn process_cancel_order(
         }
         state.bump
     };
+    let p_bump_slice = [platform_bump];
+    let expected_platform_pda = Address::create_program_address(
+        &[b"user_state", user.address().as_ref(), &p_bump_slice],
+        program_id,
+    )
+    .map_err(|_| ProgramError::InvalidSeeds)?;
 
-    let bump_slice = [state_bump];
-    let expected_state_seeds: &[&[u8]] = &[b"user_state", user.address().as_ref(), &bump_slice];
-    let expected_state_pda = Address::create_program_address(expected_state_seeds, program_id)
-        .map_err(|_| ProgramError::InvalidSeeds)?;
+    if platform_user_state.address() != &expected_platform_pda {
+        return Err(ProgramError::InvalidSeeds);
+    }
 
-    if platform_user_state.address() != &expected_state_pda {
+    let market_user_bump = unsafe {
+        let user_data = market_user_state.borrow_unchecked();
+        let state = MarketUserState::from_bytes(&user_data)?;
+        if state.wallet != *user.address() || state.market_pda != *market_pda.address() {
+            return Err(ProgramError::IncorrectAuthority);
+        }
+        state.bump
+    };
+    let m_bump_slice = [market_user_bump];
+    let expected_market_user_pda = Address::create_program_address(
+        &[
+            b"market_user",
+            market_pda.address().as_ref(),
+            user.address().as_ref(),
+            &m_bump_slice,
+        ],
+        program_id,
+    )
+    .map_err(|_| ProgramError::InvalidSeeds)?;
+
+    if market_user_state.address() != &expected_market_user_pda {
         return Err(ProgramError::InvalidSeeds);
     }
 
@@ -68,10 +105,13 @@ pub fn process_cancel_order(
 
         let maker_seat = &mut view.seats[node_user_seat_idx as usize];
 
-        if maker_seat.wallet != *user.address() || node_order_id != args.order_id {
+        if maker_seat.market_user_state != *market_user_state.address()
+            || node_order_id != args.order_id
+        {
             return Err(ProgramError::InvalidArgument);
         }
 
+        // truncate Node from Linked List Directory
         let directory_index = (args.side as usize * 100) + args.price as usize;
         let level = &mut view.directory[directory_index];
 
@@ -104,20 +144,25 @@ pub fn process_cancel_order(
             }
         }
 
-        let user_data = platform_user_state.borrow_unchecked_mut();
-        let user_mut = &mut *(user_data.as_mut_ptr() as *mut PlatformUserState);
-
         if args.side == 0 {
+            // Refund Base Collateral directly to PlatformUserState
             let refund_collateral = node_quantity * (args.price as u64);
             maker_seat.collateral_locked -= refund_collateral;
-            user_mut.collateral_available += refund_collateral;
+
+            let user_p_data = platform_user_state.borrow_unchecked_mut();
+            let user_p_mut = &mut *(user_p_data.as_mut_ptr() as *mut PlatformUserState);
+            user_p_mut.collateral_available += refund_collateral;
         } else {
+            // Refund Option Share Credits back to MarketUserState
+            let user_m_data = market_user_state.borrow_unchecked_mut();
+            let user_m_mut = &mut *(user_m_data.as_mut_ptr() as *mut MarketUserState);
+
             if args.outcome == 0 {
                 maker_seat.ot_a_locked -= node_quantity;
-                maker_seat.ot_a_claimable += node_quantity;
+                user_m_mut.ot_a_balance += node_quantity;
             } else {
                 maker_seat.ot_b_locked -= node_quantity;
-                maker_seat.ot_b_claimable += node_quantity;
+                user_m_mut.ot_b_balance += node_quantity;
             }
         }
 
@@ -127,6 +172,13 @@ pub fn process_cancel_order(
         mut_node.user_seat_idx = 0;
         mut_node.next_idx = view.header.next_free_node_idx;
         view.header.next_free_node_idx = args.order_node_idx;
+
+        if maker_seat.collateral_locked == 0
+            && maker_seat.ot_a_locked == 0
+            && maker_seat.ot_b_locked == 0
+        {
+            maker_seat.market_user_state = Address::default();
+        }
     }
 
     Ok(())

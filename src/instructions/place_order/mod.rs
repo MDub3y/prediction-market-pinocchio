@@ -3,7 +3,7 @@ pub mod market;
 pub mod merge;
 pub mod split;
 
-use crate::state::{MarketState, MarketUserState, PlaceOrderArgs};
+use crate::state::{MarketUserState, PlaceOrderArgs};
 use pinocchio::{
     AccountView, Address, ProgramResult,
     cpi::{Seed, Signer},
@@ -21,8 +21,8 @@ pub fn process_place_order(
         market_pda,
         platform_user_state,
         market_user_state,
-        orderbook,
-        system_program,
+        _orderbook,
+        _system_program,
         ..,
     ] = accounts
     else {

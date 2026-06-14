@@ -1,12 +1,12 @@
 use crate::state::{
-    MarketState, MarketTier, MarketUserState, OrderBookView, OrderNode, PlaceOrderArgs,
+    MarketState, MarketTier, MarketUserState, OrderBookView, PlaceOrderArgs,
     PlatformUserState,
 };
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) -> ProgramResult {
     let [
-        user,
+        _user,
         market_pda,
         platform_user_state,
         market_user_state,
@@ -72,7 +72,7 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
 
         if args.side == 0 {
             let cost = args.quantity * (args.price as u64);
-            let mut p_data = platform_user_state.borrow_unchecked_mut();
+            let p_data = platform_user_state.borrow_unchecked_mut();
             let user_mut = &mut *(p_data.as_mut_ptr() as *mut PlatformUserState);
             if user_mut.collateral_available < cost {
                 return Err(ProgramError::InsufficientFunds);
@@ -80,7 +80,7 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
             user_mut.collateral_available -= cost;
             maker_seat.collateral_locked += cost;
         } else {
-            let mut m_data = market_user_state.borrow_unchecked_mut();
+            let m_data = market_user_state.borrow_unchecked_mut();
             let market_user = &mut *(m_data.as_mut_ptr() as *mut MarketUserState);
             if args.outcome == 0 {
                 if market_user.ot_a_balance < args.quantity {

@@ -7,7 +7,7 @@ const FEE_BASIS_POINTS: u64 = 20;
 
 pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) -> ProgramResult {
     let [
-        user,
+        _user,
         market_pda,
         platform_user_state,
         market_user_state,
@@ -37,7 +37,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
         let taker_p_data = platform_user_state.borrow_unchecked_mut();
         let taker_p_mut = &mut *(taker_p_data.as_mut_ptr() as *mut PlatformUserState);
 
-        let mut taker_m_data = market_user_state.borrow_unchecked_mut();
+        let taker_m_data = market_user_state.borrow_unchecked_mut();
         let taker_m_mut = &mut *(taker_m_data.as_mut_ptr() as *mut MarketUserState);
 
         if args.side == 1 {
@@ -54,7 +54,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
 
                     // Fetch maker storage account page reference using the seat link
-                    let mut maker_m_data = AccountView::borrow_unchecked_mut(
+                    let maker_m_data = AccountView::borrow_unchecked_mut(
                         accounts
                             .get_mut(4 + maker_order.user_seat_idx as usize)
                             .ok_or(ProgramError::NotEnoughAccountKeys)?,
@@ -123,7 +123,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     let maker_order = &mut view.orders[head_node_idx];
                     let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
 
-                    let mut maker_m_data = AccountView::borrow_unchecked_mut(
+                    let maker_m_data = AccountView::borrow_unchecked_mut(
                         accounts
                             .get_mut(4 + maker_order.user_seat_idx as usize)
                             .ok_or(ProgramError::NotEnoughAccountKeys)?,
