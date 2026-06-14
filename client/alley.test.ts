@@ -9,7 +9,7 @@ const PROGRAM_ID = new PublicKey("D5rjf89YcBER8dJxLg1oekZFZqWUKqemSsMj5DWWXhZ9")
 function calculateOrderbookSpace(tier: number) {
     const HEADER_SIZE = 44;
     const DIRECTORY_SIZE = 8 * 100 * 2;
-    const SEAT_SIZE = 80;
+    const SEAT_SIZE = 56;
     const NODE_SIZE = 32;
 
     let seats = 0;
@@ -47,8 +47,12 @@ describe("Prediction Market tests", () => {
 
     let retailUser: Keypair;
     let retailUserState: PublicKey;
+    let retailMarketUserState: PublicKey;
     let sharedOrderbookA: Keypair;
     let sharedOrderbookB: Keypair;
+
+    let buyer2MarketUserState: PublicKey;
+    let buyer3MarketUserState: PublicKey;
 
     beforeAll(() => {
         svm = new LiteSVM();
@@ -394,6 +398,12 @@ describe("Prediction Market tests", () => {
         expect(retailUserState).not.toBeUndefined();
         expect(sharedOrderbookA).not.toBeUndefined();
 
+        const [marketUserState, bumpMarketUser] = PublicKey.findProgramAddressSync(
+            [Buffer.from("market_user"), market_pda.toBuffer(), retailUser.publicKey.toBuffer()],
+            PROGRAM_ID
+        );
+        retailMarketUserState = marketUserState;
+
         const outcome = 0;
         const side = 0;
         const orderType = 0;
@@ -401,20 +411,23 @@ describe("Prediction Market tests", () => {
         const quantity = 1_000_000n;
         const orderId = 1001n;
 
-        const instructionData = Buffer.alloc(21);
-        instructionData.writeUInt8(5, 0);
+        const instructionData = Buffer.alloc(22);
+        instructionData.writeUInt8(3, 0);
         instructionData.writeUInt8(outcome, 1);
         instructionData.writeUInt8(side, 2);
         instructionData.writeUInt8(orderType, 3);
         instructionData.writeUInt8(price, 4);
         instructionData.writeBigUInt64LE(quantity, 5);
         instructionData.writeBigUInt64LE(orderId, 13);
+        instructionData.writeUInt8(bumpMarketUser, 21);
 
         const keys = [
             { pubkey: retailUser.publicKey, isSigner: true, isWritable: true },
             { pubkey: market_pda, isSigner: false, isWritable: true },
             { pubkey: retailUserState, isSigner: false, isWritable: true },
-            { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true }
+            { pubkey: marketUserState, isSigner: false, isWritable: true },
+            { pubkey: sharedOrderbookA.publicKey, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
         ];
 
         const placeOrderIx = new TransactionInstruction({
@@ -442,22 +455,17 @@ describe("Prediction Market tests", () => {
 
         expect(txResult instanceof FailedTransactionMetadata).toBe(false);
 
-        const orderbookAccountInfo = svm.getAccount(sharedOrderbookA.publicKey);
-        expect(orderbookAccountInfo).not.toBeNull();
+        const userMarketAcctInfo = svm.getAccount(marketUserState);
+        expect(userMarketAcctInfo).not.toBeNull();
 
+        const orderbookAccountInfo = svm.getAccount(sharedOrderbookA.publicKey);
         const dataBuffer = Buffer.from(orderbookAccountInfo!.data);
 
-        const savedMarketStatePda = new PublicKey(dataBuffer.subarray(0, 32));
-        const totalAllocatedSeats = dataBuffer.readUInt32LE(32);
-        const nextFreeNodeIdx = dataBuffer.readUInt32LE(36);
-
-        expect(savedMarketStatePda.equals(market_pda)).toBe(true);
-        expect(totalAllocatedSeats).toBe(1);
-        expect(nextFreeNodeIdx).not.toBe(1);
+        const seatLinkBytes = dataBuffer.subarray(1644, 1644 + 32);
+        expect(new PublicKey(seatLinkBytes).equals(marketUserState)).toBe(true);
 
         const userStateAccountInfo = svm.getAccount(retailUserState);
         const userStateBuffer = Buffer.from(userStateAccountInfo!.data);
-
         const collateralAvailable = userStateBuffer.readBigUInt64LE(32);
         const expectedRemaining = 200_000_000n - (quantity * BigInt(price));
 

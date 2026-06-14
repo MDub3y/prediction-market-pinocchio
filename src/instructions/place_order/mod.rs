@@ -46,7 +46,7 @@ pub fn process_place_order(
         CreateAccount {
             from: user,
             to: market_user_state,
-            lamports: market_user_state.lamports(),
+            lamports: 2_000_000,
             space: MarketUserState::LEN as u64,
             owner: program_id,
         }
