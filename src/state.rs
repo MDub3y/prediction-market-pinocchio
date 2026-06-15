@@ -34,10 +34,11 @@ pub struct MarketState {
     pub is_settled: u8,
     pub market_status: u8,
     pub bump: u8,
+    pub padding: [u8; 4],
 }
 
 impl MarketState {
-    pub const LEN: usize = 252;
+    pub const LEN: usize = 256;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
         if bytes.len() < Self::LEN {
@@ -52,6 +53,7 @@ pub struct PlatformUserState {
     pub wallet: Address,
     pub collateral_available: u64,
     pub bump: u8,
+    pub padding: [u8; 7],
 }
 
 impl PlatformUserState {
@@ -78,7 +80,7 @@ pub struct MarketUserState {
 }
 
 impl MarketUserState {
-    pub const LEN: usize = 129;
+    pub const LEN: usize = 128;
     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidAccountData);

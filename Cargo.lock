@@ -21,6 +21,7 @@ dependencies = [
  "pinocchio-system",
  "pinocchio-token",
  "solana-address",
+ "solana-instruction-view",
 ]
 
 [[package]]

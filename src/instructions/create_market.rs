@@ -7,7 +7,38 @@ use pinocchio_associated_token_account::instructions::Create as CreateAssociated
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::InitializeMint2;
 
+use solana_instruction_view::{InstructionAccount, InstructionView, cpi::invoke};
+
 use crate::state::{CreateMarketArgs, MarketState, MarketTier};
+
+pub struct InitializeMetadataPointer<'a> {
+    pub mint: &'a AccountView,
+    pub authority: &'a Address,
+    pub metadata_address: &'a Address,
+}
+
+impl<'a> InitializeMetadataPointer<'a> {
+    pub fn invoke(&self, token_prorgam_2022: &Address) -> ProgramResult {
+        let mut data = [0u8; 68];
+        data[0] = 39; // extension gruop discriminator: Metadata Pointer
+        data[1] = 0; // sub-instruction discriminator: Initialize
+
+        data[2] = 1;
+        data[3..35].copy_from_slice(self.authority.as_ref());
+
+        data[35] = 1;
+        data[36..68].copy_from_slice(self.metadata_address.as_ref());
+
+        let account_meta = InstructionAccount::writable(self.mint.address());
+        let instruction = InstructionView {
+            program_id: token_prorgam_2022,
+            accounts: core::slice::from_ref(&account_meta),
+            data: &data,
+        };
+
+        invoke(&instruction, &[self.mint])
+    }
+}
 
 pub fn process_create_market(
     program_id: &Address,
@@ -119,21 +150,49 @@ pub fn process_create_market(
         from: creator,
         to: outcome_a_mint,
         lamports: outcome_a_mint.lamports(),
-        space: 82,
+        space: 150,
         owner: token_program.address(),
     }
     .invoke_signed(&[Signer::from(&ot_a_seeds)])?;
-    InitializeMint2::new(outcome_a_mint, 6, market_pda.address(), None).invoke()?;
+
+    InitializeMetadataPointer {
+        mint: outcome_a_mint,
+        authority: market_pda.address(),
+        metadata_address: market_pda.address(),
+    }
+    .invoke(token_program.address())?;
+
+    InitializeMint2::new(
+        outcome_a_mint,
+        6,
+        market_pda.address(),
+        Some(market_pda.address()),
+    )
+    .invoke()?;
 
     CreateAccount {
         from: creator,
         to: outcome_b_mint,
         lamports: outcome_b_mint.lamports(),
-        space: 82,
+        space: 150,
         owner: token_program.address(),
     }
     .invoke_signed(&[Signer::from(&ot_b_seeds)])?;
-    InitializeMint2::new(outcome_b_mint, 6, market_pda.address(), None).invoke()?;
+
+    InitializeMetadataPointer {
+        mint: outcome_b_mint,
+        authority: market_pda.address(),
+        metadata_address: market_pda.address(),
+    }
+    .invoke(token_program.address())?;
+
+    InitializeMint2::new(
+        outcome_b_mint,
+        6,
+        market_pda.address(),
+        Some(market_pda.address()),
+    )
+    .invoke()?;
 
     CreateAssociatedTokenAccount {
         funding_account: creator,
