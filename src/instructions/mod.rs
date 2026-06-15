@@ -1,7 +1,9 @@
 pub mod cancel_order;
 pub mod claim_funds;
+pub mod claim_winning;
 pub mod create_market;
 pub mod deposit_collateral;
+pub mod emergency_refund;
 pub mod initialize_orderbooks;
 pub mod place_order;
 pub mod resolve_market;

@@ -34,6 +34,10 @@ pub fn process_instruction(
 
         4 => instructions::cancel_order::process_cancel_order(program_id, accounts, rest),
         5 => instructions::claim_funds::process_claim_funds(program_id, accounts, rest),
+
+        6 => instructions::resolve_market::process_resolve_market(program_id, accounts, rest),
+        7 => instructions::claim_winning::process_claim_winnings(program_id, accounts, rest),
+        8 => instructions::emergency_refund::process_emergency_refund(program_id, accounts, rest),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
