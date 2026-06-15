@@ -21,6 +21,7 @@ impl MarketTier {
 #[repr(C)]
 pub struct MarketState {
     pub creator: Address,
+    pub oracle_authority: Address,
     pub market_id: u64,
     pub settlement_deadline: i64,
     pub collateral_vault: Address,
@@ -34,6 +35,7 @@ pub struct MarketState {
     pub fee_rate_bps: u16,              // E.g., 500 bps = 5% Taker Fee Rate
     pub tier: u8,
     pub is_settled: u8,
+    pub winning_outcome: u8,
     pub market_status: u8,
     pub bump: u8,
     pub padding: [u8; 2],
