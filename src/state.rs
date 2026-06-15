@@ -29,12 +29,14 @@ pub struct MarketState {
     pub collateral_mint: Address,
     pub orderbook_a: Address,
     pub orderbook_b: Address,
-    pub accumulated_fees: u64,
+    pub accumulated_platform_fees: u64, // 50% Share
+    pub accumulated_creator_fees: u64,  // 10% Share
+    pub fee_rate_bps: u16,              // E.g., 500 bps = 5% Taker Fee Rate
     pub tier: u8,
     pub is_settled: u8,
     pub market_status: u8,
     pub bump: u8,
-    pub padding: [u8; 4],
+    pub padding: [u8; 2],
 }
 
 impl MarketState {
