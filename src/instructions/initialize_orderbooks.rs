@@ -54,15 +54,13 @@ pub fn process_initialize_orderbooks(
         unsafe {
             let data = book_account.borrow_unchecked_mut();
 
+            core::ptr::write_bytes(data.as_mut_ptr(), 0, data.len());
+
             let header = &mut *(data.as_mut_ptr() as *mut OrderBookHeader);
             header.market_state_pda = market_pda.address().clone();
             header.total_allocated_seats = 0;
-            header.next_free_node_idx = 1;
+            header.next_free_node_idx = 1; // free list starts at idx 1 (idx 0 = null sentinel)
             header.outcome_index = *idx;
-
-            let offset_dir = core::mem::size_of::<OrderBookHeader>();
-            let dir_ptr = data.as_mut_ptr().add(offset_dir) as *mut PriceLevel;
-            core::ptr::write_bytes(dir_ptr, 0, 200);
 
             let max_orders = match tier {
                 MarketTier::Small => crate::state::SMALL_ORDERS,
@@ -76,9 +74,19 @@ pub fn process_initialize_orderbooks(
                 MarketTier::Large => crate::state::LARGE_SEATS,
             };
 
+            let offset_dir = core::mem::size_of::<OrderBookHeader>();
+            let dir_ptr = data.as_mut_ptr().add(offset_dir) as *mut PriceLevel;
+            core::ptr::write_bytes(dir_ptr, 0, 200);
             let offset_seats = offset_dir + (core::mem::size_of::<PriceLevel>() * 200);
             let offset_orders = offset_seats + (core::mem::size_of::<TraderSeat>() * max_seats);
             let orders_ptr = data.as_mut_ptr().add(offset_orders) as *mut OrderNode;
+
+            // explicitly cleared the 0th index node to guarantee a pure null sentinel
+            let null_node = &mut *orders_ptr.add(0);
+            null_node.user_seat_idx = 0;
+            null_node.quantity = 0;
+            null_node.next_idx = 0;
+            null_node.order_id = 0;
 
             for i in 1..max_orders {
                 let node = &mut *orders_ptr.add(i);
