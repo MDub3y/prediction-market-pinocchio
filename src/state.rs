@@ -76,7 +76,7 @@ pub struct MarketUserState {
     pub platform_user_state: Address,
     pub ot_a_balance: u64,
     pub ot_b_balance: u64,
-    pub collateral_claimable: u64,
+    pub collateral_claimable: u64, // destination for makre rebate rewards
     pub bump: u8,
     pub padding: [u8; 7],
 }
