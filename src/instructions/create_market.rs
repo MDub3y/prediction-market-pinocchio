@@ -216,7 +216,9 @@ pub fn process_create_market(
         state_mut.collateral_mint = collateral_mint.address().clone();
         state_mut.orderbook_a = Address::default();
         state_mut.orderbook_b = Address::default();
-        state_mut.accumulated_fees = 0;
+        state_mut.accumulated_platform_fees = 0;
+        state_mut.accumulated_creator_fees = 0;
+        state_mut.fee_rate_bps = 500;
         state_mut.tier = args.tier;
         state_mut.is_settled = 0;
         state_mut.market_status = 0;
