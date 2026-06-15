@@ -5,6 +5,20 @@ use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
 const FEE_BASIS_POINTS: u64 = 20;
 
+#[inline(always)]
+fn calculate_symmetric_fee(quantity: u64, price: u8, fee_rate_bps: u64) -> u64 {
+    let p = price as u64;
+    if p == 0 || p >= 100 {
+        return 0;
+    }
+
+    // Denominator = 10,000 (bps) * 100 (p percentage) * 100 (1-p percentage) = 100,000,000
+    let numerator = quantity * fee_rate_bps * p * (100 - p);
+    let fee = numerator / 100_000_000;
+
+    if fee == 0 && numerator > 0 { 1 } else { fee }
+}
+
 pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) -> ProgramResult {
     let [
         _user,
@@ -18,10 +32,10 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
-    let tier = unsafe {
+    let (tier, fee_rate_bps) = unsafe {
         let data = market_pda.borrow_unchecked();
         let state = MarketState::from_bytes(&data)?;
-        MarketTier::from_u8(state.tier)?
+        (MarketTier::from_u8(state.tier)?, state.fee_rate_bps as u64)
     };
 
     unsafe {
@@ -56,7 +70,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     // Fetch maker storage account page reference using the seat link
                     let maker_m_data = AccountView::borrow_unchecked_mut(
                         accounts
-                            .get_mut(4 + maker_order.user_seat_idx as usize)
+                            .get_mut(5 + maker_order.user_seat_idx as usize)
                             .ok_or(ProgramError::NotEnoughAccountKeys)?,
                     );
                     let maker_m_mut = &mut *(maker_m_data.as_mut_ptr() as *mut MarketUserState);
@@ -67,8 +81,12 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                         maker_order.quantity
                     };
                     let trade_collateral = match_qty * (current_price as u64);
-                    let fee = (trade_collateral * FEE_BASIS_POINTS) / 10_000;
-                    let net_collateral = trade_collateral - fee;
+                    let fee = calculate_symmetric_fee(match_qty, current_price as u8, fee_rate_bps);
+                    let fee_platform = fee / 2; // 50%
+                    let fee_maker = (fee * 40) / 100; // 40%
+                    let fee_creator = fee - fee_platform - fee_maker; // 10% dust protection remainder
+
+                    let net_taker_payout = trade_collateral - fee;
 
                     if args.outcome == 0 {
                         if taker_m_mut.ot_a_balance < match_qty {
@@ -85,8 +103,11 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     }
 
                     maker_seat.collateral_locked -= trade_collateral;
-                    taker_p_mut.collateral_available += net_collateral;
-                    market_mut.accumulated_fees += fee;
+
+                    taker_p_mut.collateral_available += net_taker_payout;
+                    maker_m_mut.collateral_claimable += fee_maker;
+                    market_mut.accumulated_platform_fees += fee_platform;
+                    market_mut.accumulated_creator_fees += fee_creator;
 
                     taker_remaining -= match_qty;
                     maker_order.quantity -= match_qty;
@@ -125,7 +146,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
 
                     let maker_m_data = AccountView::borrow_unchecked_mut(
                         accounts
-                            .get_mut(4 + maker_order.user_seat_idx as usize)
+                            .get_mut(5 + maker_order.user_seat_idx as usize)
                             .ok_or(ProgramError::NotEnoughAccountKeys)?,
                     );
                     let maker_m_mut = &mut *(maker_m_data.as_mut_ptr() as *mut MarketUserState);
@@ -136,14 +157,25 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                         maker_order.quantity
                     };
                     let trade_collateral = match_qty * (current_price as u64);
-                    let fee = (trade_collateral * FEE_BASIS_POINTS) / 10_000;
-                    let net_collateral = trade_collateral - fee;
+                    let fee = calculate_symmetric_fee(match_qty, current_price as u8, fee_rate_bps);
+                    let fee_platform = fee / 2;
+                    let fee_maker = (fee * 40) / 100;
+                    let fee_creator = fee - fee_platform - fee_maker;
 
-                    if taker_p_mut.collateral_available < trade_collateral {
+                    let total_taker_cost = trade_collateral + fee;
+
+                    if taker_p_mut.collateral_available < total_taker_cost {
                         return Err(ProgramError::InsufficientFunds);
                     }
-                    taker_p_mut.collateral_available -= trade_collateral;
-                    maker_m_mut.collateral_claimable += net_collateral;
+
+                    // Debit total capital cost + symmetric fee from the Taker
+                    taker_p_mut.collateral_available -= total_taker_cost;
+
+                    // Credit resting maker original trade collateral + their 40% rebate share
+                    maker_m_mut.collateral_claimable += trade_collateral + fee_maker;
+
+                    market_mut.accumulated_platform_fees += fee_platform;
+                    market_mut.accumulated_creator_fees += fee_creator;
 
                     if args.outcome == 0 {
                         taker_m_mut.ot_a_balance += match_qty;
@@ -153,7 +185,6 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                         maker_seat.ot_b_locked -= match_qty;
                     }
 
-                    market_mut.accumulated_fees += fee;
                     taker_remaining -= match_qty;
                     maker_order.quantity -= match_qty;
 
