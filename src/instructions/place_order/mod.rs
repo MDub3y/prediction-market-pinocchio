@@ -16,17 +16,20 @@ pub fn process_place_order(
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let [
-        user,
-        market_pda,
-        platform_user_state,
-        market_user_state,
-        _orderbook,
-        _system_program,
-        ..,
-    ] = accounts
-    else {
-        return Err(ProgramError::MissingRequiredSignature);
+    if accounts.len() < 7 {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    }
+
+    let accounts_ptr = accounts.as_mut_ptr();
+    let (user, market_pda, platform_user_state, market_user_state, _orderbook_a, _orderbook_b) = unsafe {
+        (
+            &mut *accounts_ptr.add(0),
+            &mut *accounts_ptr.add(1),
+            &mut *accounts_ptr.add(2),
+            &mut *accounts_ptr.add(3),
+            &mut *accounts_ptr.add(4),
+            &mut *accounts_ptr.add(5),
+        )
     };
 
     let args = PlaceOrderArgs::from_bytes(instruction_data)?;
