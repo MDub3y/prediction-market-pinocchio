@@ -86,7 +86,7 @@ pub fn process_claim_winnings(
     }
 
     unsafe {
-        let mut m_data = market_user_state.borrow_unchecked_mut();
+        let m_data = market_user_state.borrow_unchecked_mut();
         let market_user = &mut *(m_data.as_mut_ptr() as *mut MarketUserState);
 
         if winning_mint_target == market_user.market_pda {
@@ -107,7 +107,7 @@ pub fn process_claim_winnings(
     }
 
     unsafe {
-        let mut p_data = platform_user_state.borrow_unchecked_mut();
+        let p_data = platform_user_state.borrow_unchecked_mut();
         let platform_user = &mut *(p_data.as_mut_ptr() as *mut PlatformUserState);
         platform_user.collateral_available += total_winnings_to_credit;
     }

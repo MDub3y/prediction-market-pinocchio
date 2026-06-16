@@ -144,12 +144,12 @@ pub fn process_emergency_refund(
     }
 
     unsafe {
-        let mut m_data = market_user_state.borrow_unchecked_mut();
+        let m_data = market_user_state.borrow_unchecked_mut();
         let market_user = &mut *(m_data.as_mut_ptr() as *mut MarketUserState);
         market_user.ot_a_balance -= remaining_a_to_burn;
         market_user.ot_b_balance -= remaining_b_to_burn;
 
-        let mut p_data = platform_user_state.borrow_unchecked_mut();
+        let p_data = platform_user_state.borrow_unchecked_mut();
         let platform_user = &mut *(p_data.as_mut_ptr() as *mut PlatformUserState);
         platform_user.collateral_available += refund_amount;
     }

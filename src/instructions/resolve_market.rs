@@ -23,7 +23,7 @@ pub fn process_resolve_market(
 
     // Mutate the on-chain state to lock down trading and enable redemption channels
     unsafe {
-        let mut data_mut = market_pda.borrow_unchecked_mut();
+        let data_mut = market_pda.borrow_unchecked_mut();
         let state_mut = &mut *(data_mut.as_mut_ptr() as *mut MarketState);
 
         if state_mut.market_status != 1 || state_mut.is_settled != 0 {
