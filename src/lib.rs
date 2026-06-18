@@ -38,6 +38,8 @@ pub fn process_instruction(
         6 => instructions::resolve_market::process_resolve_market(program_id, accounts, rest),
         7 => instructions::claim_winning::process_claim_winnings(program_id, accounts, rest),
         8 => instructions::emergency_refund::process_emergency_refund(program_id, accounts, rest),
+
+        9 => instructions::ping::process_ping(program_id, accounts, instruction_data),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
