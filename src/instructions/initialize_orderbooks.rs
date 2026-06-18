@@ -59,7 +59,7 @@ pub fn process_initialize_orderbooks(
             let header = &mut *(data.as_mut_ptr() as *mut OrderBookHeader);
             header.market_state_pda = market_pda.address().clone();
             header.total_allocated_seats = 0;
-            header.next_free_node_idx = 1; // free list starts at idx 1 (idx 0 = null sentinel)
+            header.next_free_node_idx = 1;
             header.outcome_index = *idx;
 
             let max_orders = match tier {
