@@ -1,5 +1,7 @@
 use pinocchio::{Address, error::ProgramError};
 
+pub const NULL_ADDRESS: Address = Address::new_from_array([0u8; 32]);
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum MarketTier {
     Small = 0,
@@ -42,7 +44,7 @@ pub struct MarketState {
 }
 
 impl MarketState {
-    pub const LEN: usize = 256;
+    pub const LEN: usize = 296;
 
     pub fn from_bytes(bytes: &[u8]) -> Result<&Self, ProgramError> {
         if bytes.len() < Self::LEN {
@@ -203,10 +205,14 @@ pub struct CreateMarketArgs {
     pub bump_ot_a: u8,
     pub bump_ot_b: u8,
     pub tier: u8,
+
+    pub name_len: u16,
+    pub symbol_len: u16,
+    pub uri_len: u16,
 }
 
 impl CreateMarketArgs {
-    pub const LEN: usize = 19;
+    pub const LEN: usize = 25;
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
@@ -217,6 +223,9 @@ impl CreateMarketArgs {
             bump_ot_a: bytes[16],
             bump_ot_b: bytes[17],
             tier: bytes[18],
+            name_len: u16::from_le_bytes(bytes[19..21].try_into().unwrap()),
+            symbol_len: u16::from_le_bytes(bytes[21..23].try_into().unwrap()),
+            uri_len: u16::from_le_bytes(bytes[23..25].try_into().unwrap()),
         })
     }
 }
