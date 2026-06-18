@@ -5,7 +5,7 @@ use pinocchio::{
 };
 use pinocchio_associated_token_account::instructions::Create as CreateAssociatedTokenAccount;
 use pinocchio_system::instructions::CreateAccount;
-use pinocchio_token::instructions::InitializeMint2;
+use pinocchio_token_2022::instructions::InitializeMint2;
 
 use solana_instruction_view::{InstructionAccount, InstructionView, cpi::invoke};
 
@@ -150,7 +150,7 @@ pub fn process_create_market(
         from: creator,
         to: outcome_a_mint,
         lamports: outcome_a_mint.lamports(),
-        space: 150,
+        space: 151,
         owner: token_program.address(),
     }
     .invoke_signed(&[Signer::from(&ot_a_seeds)])?;
@@ -162,19 +162,20 @@ pub fn process_create_market(
     }
     .invoke(token_program.address())?;
 
-    InitializeMint2::new(
-        outcome_a_mint,
-        6,
-        market_pda.address(),
-        Some(market_pda.address()),
-    )
+    InitializeMint2 {
+        mint: outcome_a_mint,
+        decimals: 6,
+        mint_authority: market_pda.address(),
+        freeze_authority: Some(market_pda.address()),
+        token_program: token_program.address(),
+    }
     .invoke()?;
 
     CreateAccount {
         from: creator,
         to: outcome_b_mint,
         lamports: outcome_b_mint.lamports(),
-        space: 150,
+        space: 151,
         owner: token_program.address(),
     }
     .invoke_signed(&[Signer::from(&ot_b_seeds)])?;
@@ -186,12 +187,13 @@ pub fn process_create_market(
     }
     .invoke(token_program.address())?;
 
-    InitializeMint2::new(
-        outcome_b_mint,
-        6,
-        market_pda.address(),
-        Some(market_pda.address()),
-    )
+    InitializeMint2 {
+        mint: outcome_b_mint,
+        decimals: 6,
+        mint_authority: market_pda.address(),
+        freeze_authority: Some(market_pda.address()),
+        token_program: token_program.address(),
+    }
     .invoke()?;
 
     CreateAssociatedTokenAccount {
