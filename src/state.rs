@@ -95,14 +95,14 @@ impl MarketUserState {
     }
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 pub struct PriceLevel {
     pub head: u32,
     pub tail: u32,
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 pub struct OrderNode {
     pub user_seat_idx: u32,
@@ -111,8 +111,8 @@ pub struct OrderNode {
     pub order_id: u64,
 }
 
-#[repr(C)]
-#[derive(Clone, Default)]
+#[repr(C, packed)]
+#[derive(Default)]
 pub struct TraderSeat {
     pub market_user_state: Address,
     pub collateral_locked: u64,
@@ -120,7 +120,7 @@ pub struct TraderSeat {
     pub ot_b_locked: u64,
 }
 
-#[repr(C)]
+#[repr(C, packed)]
 pub struct OrderBookHeader {
     pub market_state_pda: Address,
     pub total_allocated_seats: u32,
