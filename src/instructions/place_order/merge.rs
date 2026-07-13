@@ -1,4 +1,7 @@
-use crate::state::{MarketUserState, PlaceOrderArgs, PlatformUserState};
+use crate::{
+    errors::AlleyError,
+    state::{MarketUserState, PlaceOrderArgs, PlatformUserState},
+};
 use pinocchio::{AccountView, ProgramResult, error::ProgramError};
 
 pub fn execute_merge_operation(
@@ -13,7 +16,7 @@ pub fn execute_merge_operation(
         let m_data = market_user_state.borrow_unchecked_mut();
         let market_user = &mut *(m_data.as_mut_ptr() as *mut MarketUserState);
         if market_user.ot_a_balance < args.quantity || market_user.ot_b_balance < args.quantity {
-            return Err(ProgramError::InsufficientFunds);
+            return Err(AlleyError::InsufficientCollateral.into());
         }
         market_user.ot_a_balance -= args.quantity;
         market_user.ot_b_balance -= args.quantity;

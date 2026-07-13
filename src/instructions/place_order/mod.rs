@@ -3,7 +3,10 @@ pub mod market;
 pub mod merge;
 pub mod split;
 
-use crate::state::{MarketUserState, PlaceOrderArgs};
+use crate::{
+    errors::AlleyError,
+    state::{MarketState, MarketUserState, PlaceOrderArgs, PlatformUserState},
+};
 use pinocchio::{
     AccountView, Address, ProgramResult,
     cpi::{Seed, Signer},
@@ -35,6 +38,26 @@ pub fn process_place_order(
     let args = PlaceOrderArgs::from_bytes(instruction_data)?;
     if !user.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    unsafe {
+        let market_data = market_pda.borrow_unchecked();
+        let market_state = MarketState::from_bytes(&market_data)?;
+        if market_state.is_settled == 1 || market_state.market_status == 2 {
+            return Err(AlleyError::MarketAlreadySettled.into());
+        }
+    }
+
+    // Global Profile Verification: Catch empty account buffers before pointer casting
+    if platform_user_state.data_len() < PlatformUserState::LEN {
+        return Err(AlleyError::PlatformUserNotInitialized.into());
+    }
+
+    // Input Boundary Verification
+    if args.order_type == 0 || args.order_type == 1 {
+        if args.price == 0 || args.price >= 100 {
+            return Err(AlleyError::InvalidPriceBounds.into());
+        }
     }
 
     if market_user_state.data_len() == 0 {

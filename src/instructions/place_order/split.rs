@@ -1,4 +1,7 @@
-use crate::state::{MarketUserState, PlaceOrderArgs, PlatformUserState};
+use crate::{
+    errors::AlleyError,
+    state::{MarketUserState, PlaceOrderArgs, PlatformUserState},
+};
 use pinocchio::{AccountView, ProgramResult, error::ProgramError};
 
 pub fn execute_split_operation(
@@ -13,7 +16,7 @@ pub fn execute_split_operation(
         let p_data = platform_user_state.borrow_unchecked_mut();
         let platform_state = &mut *(p_data.as_mut_ptr() as *mut PlatformUserState);
         if platform_state.collateral_available < args.quantity {
-            return Err(ProgramError::InsufficientFunds);
+            return Err(AlleyError::InsufficientCollateral.into());
         }
         platform_state.collateral_available -= args.quantity;
     }

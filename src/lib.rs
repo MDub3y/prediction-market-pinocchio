@@ -5,6 +5,7 @@ use pinocchio::{
     program_entrypoint,
 };
 
+pub mod errors;
 pub mod instructions;
 pub mod log;
 pub mod state;
