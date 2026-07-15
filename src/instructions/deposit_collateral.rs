@@ -54,7 +54,7 @@ pub fn process_deposit_collateral(
         CreateAccount {
             from: user,
             to: platform_user_state,
-            lamports: platform_user_state.lamports(),
+            lamports: 1_500_000,
             space: PlatformUserState::LEN as u64,
             owner: program_id,
         }
