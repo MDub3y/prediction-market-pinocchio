@@ -209,7 +209,11 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
         }
 
         if taker_remaining > 0 {
-            return Err(ProgramError::InvalidArgument);
+            if taker_remaining == args.quantity {
+                // FOK Behavior: Absolutely zero liquidity found, revert transaction cleanly
+                return Err(crate::errors::AlleyError::InsufficientBookLiquidity.into());
+            }
+            // FAK Behavior: Partial match achieved! Commit the filled contracts and kill the rest cleanly
         }
     }
 
