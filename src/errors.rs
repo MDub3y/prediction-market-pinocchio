@@ -13,6 +13,8 @@ pub enum AlleyError {
     InvalidPriceBounds = 3,
     /// 0x4 - Tried to merge or sell more outcome shares than currently owned
     InsufficientOutcomeTokens = 4,
+    /// 0x5 - explicit market depth liquidity exception variant
+    InsufficientBookLiquidity = 5,
 }
 
 impl From<AlleyError> for ProgramError {
