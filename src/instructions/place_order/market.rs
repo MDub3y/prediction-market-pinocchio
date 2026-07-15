@@ -80,7 +80,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     } else {
                         maker_order.quantity
                     };
-                    let trade_collateral = match_qty * (current_price as u64);
+                    let trade_collateral = (match_qty * current_price as u64) / 100;
                     let fee = calculate_symmetric_fee(match_qty, current_price as u8, fee_rate_bps);
                     let fee_platform = fee / 2; // 50%
                     let fee_maker = (fee * 40) / 100; // 40%
@@ -156,7 +156,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     } else {
                         maker_order.quantity
                     };
-                    let trade_collateral = match_qty * (current_price as u64);
+                    let trade_collateral = (match_qty * current_price as u64) / 100;
                     let fee = calculate_symmetric_fee(match_qty, current_price as u8, fee_rate_bps);
                     let fee_platform = fee / 2;
                     let fee_maker = (fee * 40) / 100;

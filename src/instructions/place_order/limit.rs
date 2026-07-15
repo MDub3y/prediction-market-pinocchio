@@ -98,7 +98,7 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
                     let fee_maker = (fee * 40) / 100;
                     let fee_creator = fee - fee_platform - fee_maker;
 
-                    let taker_cost = (match_qty * taker_matched_price as u64) + fee;
+                    let taker_cost = ((match_qty * taker_matched_price as u64) / 100) + fee;
                     if taker_p_mut.collateral_available < taker_cost {
                         return Err(ProgramError::InsufficientFunds);
                     }
@@ -179,7 +179,7 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
             let maker_seat = &mut view_target.seats[active_seat_idx as usize];
 
             if args.side == 0 {
-                let cost = taker_remaining * (args.price as u64);
+                let cost = (taker_remaining * args.price as u64) / 100;
                 if taker_p_mut.collateral_available < cost {
                     return Err(ProgramError::InsufficientFunds);
                 }

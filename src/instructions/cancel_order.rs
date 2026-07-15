@@ -146,7 +146,7 @@ pub fn process_cancel_order(
 
         if args.side == 0 {
             // Refund Base Collateral directly to PlatformUserState
-            let refund_collateral = node_quantity * (args.price as u64);
+            let refund_collateral = (node_quantity * args.price as u64) / 100;
             maker_seat.collateral_locked -= refund_collateral;
 
             let user_p_data = platform_user_state.borrow_unchecked_mut();
