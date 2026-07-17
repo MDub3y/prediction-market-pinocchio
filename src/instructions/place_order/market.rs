@@ -209,11 +209,11 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
         }
 
         if taker_remaining > 0 {
-            if taker_remaining == args.quantity {
-                // FOK Behavior: Absolutely zero liquidity found, revert transaction cleanly
-                return Err(crate::errors::AlleyError::InsufficientBookLiquidity.into());
+            if args.order_type == 4 {
+                // FOK: Forcibly abort transaction and reject state modifications if entire order cannot clear
+                return Err(crate::errors::AlleyError::MarketOrderFillOrKillFailed.into());
             }
-            // FAK Behavior: Partial match achieved! Commit the filled contracts and kill the rest cleanly
+            // FAK: Settle whatever matches were found smoothly. Unmatched remainder drops automatically without throwing errors.
         }
     }
 
