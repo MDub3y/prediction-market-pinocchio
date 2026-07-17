@@ -93,7 +93,7 @@ pub fn process_place_order(
 
     match args.order_type {
         0 => limit::execute_limit_order(accounts, &args),
-        1 => market::execute_market_order(accounts, &args),
+        1 | 4 => market::execute_market_order(accounts, &args),
         2 => split::execute_split_operation(accounts, &args),
         3 => merge::execute_merge_operation(accounts, &args),
         _ => Err(ProgramError::InvalidArgument),
