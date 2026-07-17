@@ -27,7 +27,7 @@ pub fn process_create_market(
         system_program,
         token_program,
         _associated_token_program,
-        oracle_authority_acc,
+        _oracle_authority_acc,
         ..,
     ] = accounts
     else {
@@ -113,7 +113,19 @@ pub fn process_create_market(
     ];
     let state_signer = Signer::from(&state_seeds);
 
-    let market_state_rent = 3_000_000u64;
+    let dynamic_strings_overhead = if args.has_custom_meta == 1 {
+        (args.name_a_len as u64)
+            + (args.symbol_a_len as u64)
+            + (args.name_b_len as u64)
+            + (args.symbol_b_len as u64)
+            + (args.uri_a_len as u64)
+            + (args.uri_b_len as u64)
+    } else {
+        0
+    };
+
+    let market_state_rent_space = MarketState::LEN as u64 + dynamic_strings_overhead;
+    let market_state_rent = 3_500_000u64;
     let token_mint_rent = 2_000_000u64;
     const MINT_WITH_EXTENSION_SPACE: u64 = 151;
 
@@ -123,7 +135,7 @@ pub fn process_create_market(
         from: creator,
         to: market_pda,
         lamports: market_state_rent,
-        space: MarketState::LEN as u64,
+        space: market_state_rent_space,
         owner: program_id,
     }
     .invoke_signed(&[state_signer])?;
@@ -193,7 +205,8 @@ pub fn process_create_market(
         let state_mut = &mut *(data_slice.as_mut_ptr() as *mut MarketState);
 
         state_mut.creator = creator.address().clone();
-        state_mut.oracle_authority = oracle_authority_acc.address().clone();
+        state_mut.oracle_authority = crate::instructions::resolve_market::TXLINE_PROGRAM_ID.clone(); // Hardcoded to trustless TxLINE address
+        state_mut.market_id = args.market_id;
         state_mut.market_id = args.market_id;
         state_mut.settlement_deadline = args.settlement_deadline;
         state_mut.collateral_vault = collateral_vault.address().clone();
