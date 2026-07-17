@@ -127,7 +127,8 @@ pub fn process_create_market(
     let market_state_rent_space = MarketState::LEN as u64 + dynamic_strings_overhead;
     let market_state_rent = 3_500_000u64;
     let token_mint_rent = 2_000_000u64;
-    const MINT_WITH_EXTENSION_SPACE: u64 = 151;
+
+    let mint_account_space = if args.has_custom_meta == 1 { 151 } else { 82 };
 
     // 4. Step 1: Initialize Market State PDA
     pinocchio_log::log!("⚡ [Alley]: Creating Market State PDA account...");
@@ -146,18 +147,20 @@ pub fn process_create_market(
         from: creator,
         to: outcome_a_mint,
         lamports: token_mint_rent,
-        space: MINT_WITH_EXTENSION_SPACE,
+        space: mint_account_space,
         owner: token_program.address(),
     }
     .invoke_signed(&[Signer::from(&ot_a_seeds)])?;
 
-    InitializeMetadataPointer {
-        mint: outcome_a_mint,
-        authority: Some(market_pda.address()),
-        metadata_address: Some(market_pda.address()),
-        token_program: token_program.address(),
+    if args.has_custom_meta == 1 {
+        InitializeMetadataPointer {
+            mint: outcome_a_mint,
+            authority: Some(market_pda.address()),
+            metadata_address: Some(market_pda.address()),
+            token_program: token_program.address(),
+        }
+        .invoke()?;
     }
-    .invoke()?;
 
     InitializeMint2 {
         mint: outcome_a_mint,
@@ -174,18 +177,20 @@ pub fn process_create_market(
         from: creator,
         to: outcome_b_mint,
         lamports: token_mint_rent,
-        space: MINT_WITH_EXTENSION_SPACE,
+        space: mint_account_space,
         owner: token_program.address(),
     }
     .invoke_signed(&[Signer::from(&ot_b_seeds)])?;
 
-    InitializeMetadataPointer {
-        mint: outcome_b_mint,
-        authority: Some(market_pda.address()),
-        metadata_address: Some(market_pda.address()),
-        token_program: token_program.address(),
+    if args.has_custom_meta == 1 {
+        InitializeMetadataPointer {
+            mint: outcome_b_mint,
+            authority: Some(market_pda.address()),
+            metadata_address: Some(market_pda.address()),
+            token_program: token_program.address(),
+        }
+        .invoke()?;
     }
-    .invoke()?;
 
     InitializeMint2 {
         mint: outcome_b_mint,
