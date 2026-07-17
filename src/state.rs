@@ -205,14 +205,17 @@ pub struct CreateMarketArgs {
     pub bump_ot_a: u8,
     pub bump_ot_b: u8,
     pub tier: u8,
-
-    pub name_len: u16,
-    pub symbol_len: u16,
-    pub uri_len: u16,
+    pub has_custom_meta: u8,
+    pub name_a_len: u16,
+    pub symbol_a_len: u16,
+    pub name_b_len: u16,
+    pub symbol_b_len: u16,
+    pub uri_a_len: u16,
+    pub uri_b_len: u16,
 }
 
 impl CreateMarketArgs {
-    pub const LEN: usize = 25;
+    pub const LEN: usize = 32;
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
@@ -223,9 +226,13 @@ impl CreateMarketArgs {
             bump_ot_a: bytes[16],
             bump_ot_b: bytes[17],
             tier: bytes[18],
-            name_len: u16::from_le_bytes(bytes[19..21].try_into().unwrap()),
-            symbol_len: u16::from_le_bytes(bytes[21..23].try_into().unwrap()),
-            uri_len: u16::from_le_bytes(bytes[23..25].try_into().unwrap()),
+            has_custom_meta: bytes[19],
+            name_a_len: u16::from_le_bytes(bytes[20..22].try_into().unwrap()),
+            symbol_a_len: u16::from_le_bytes(bytes[22..24].try_into().unwrap()),
+            name_b_len: u16::from_le_bytes(bytes[24..26].try_into().unwrap()),
+            symbol_b_len: u16::from_le_bytes(bytes[26..28].try_into().unwrap()),
+            uri_a_len: u16::from_le_bytes(bytes[28..30].try_into().unwrap()),
+            uri_b_len: u16::from_le_bytes(bytes[30..32].try_into().unwrap()),
         })
     }
 }
