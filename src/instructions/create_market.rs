@@ -3,7 +3,6 @@ use pinocchio::{
     cpi::{Seed, Signer},
     error::ProgramError,
 };
-use pinocchio_associated_token_account::instructions::Create as CreateAssociatedTokenAccount;
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token_2022::instructions::{
     InitializeMint2, metadata_pointer::Initialize as InitializeMetadataPointer,
@@ -116,6 +115,7 @@ pub fn process_create_market(
 
     let market_state_rent = 3_000_000u64;
     let token_mint_rent = 2_000_000u64;
+    const MINT_WITH_EXTENSION_SPACE: u64 = 151;
 
     // 4. Step 1: Initialize Market State PDA
     pinocchio_log::log!("⚡ [Alley]: Creating Market State PDA account...");
@@ -134,12 +134,12 @@ pub fn process_create_market(
         from: creator,
         to: outcome_a_mint,
         lamports: token_mint_rent,
-        space: 151,
+        space: MINT_WITH_EXTENSION_SPACE,
         owner: token_program.address(),
     }
     .invoke_signed(&[Signer::from(&ot_a_seeds)])?;
 
-    /* InitializeMetadataPointer {
+    InitializeMetadataPointer {
         mint: outcome_a_mint,
         authority: Some(market_pda.address()),
         metadata_address: Some(market_pda.address()),
@@ -154,7 +154,7 @@ pub fn process_create_market(
         freeze_authority: Some(market_pda.address()),
         token_program: token_program.address(),
     }
-    .invoke()?; */
+    .invoke()?;
 
     // 6. Step 3: Initialize Outcome B Token-2022 Mint
     pinocchio_log::log!("⚡ [Alley]: Constructing Outcome B Asset Ledger...");
@@ -162,12 +162,12 @@ pub fn process_create_market(
         from: creator,
         to: outcome_b_mint,
         lamports: token_mint_rent,
-        space: 151,
+        space: MINT_WITH_EXTENSION_SPACE,
         owner: token_program.address(),
     }
     .invoke_signed(&[Signer::from(&ot_b_seeds)])?;
 
-    /* InitializeMetadataPointer {
+    InitializeMetadataPointer {
         mint: outcome_b_mint,
         authority: Some(market_pda.address()),
         metadata_address: Some(market_pda.address()),
@@ -182,21 +182,9 @@ pub fn process_create_market(
         freeze_authority: Some(market_pda.address()),
         token_program: token_program.address(),
     }
-    .invoke()?; */
+    .invoke()?;
 
-    // 7. Step 4: Spawn the Collateral Escrow Associated Token Account Vault
-    pinocchio_log::log!("⚡ [Alley]: Spawning Escrow Vault Account via ATA Program...");
-    /* CreateAssociatedTokenAccount {
-           funding_account: creator,
-           account: collateral_vault,
-           wallet: market_pda,
-           mint: collateral_mint,
-           system_program,
-           token_program,
-       }
-       .invoke()?;
-    */
-    // 8. Bare-Metal Memory Field Mapping Serialization
+    // 7. Bare-Metal Memory Field Mapping Serialization
     pinocchio_log::log!(
         "💾 [Alley]: Committing structured configurations to ledger storage slots..."
     );
