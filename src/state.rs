@@ -202,6 +202,8 @@ impl<'a> OrderBookView<'a> {
 pub struct CreateMarketArgs {
     pub market_id: u64,
     pub settlement_deadline: i64,
+    pub market_rent: u64,
+    pub mint_rent: u64,
     pub bump_ot_a: u8,
     pub bump_ot_b: u8,
     pub tier: u8,
@@ -215,7 +217,7 @@ pub struct CreateMarketArgs {
 }
 
 impl CreateMarketArgs {
-    pub const LEN: usize = 32;
+    pub const LEN: usize = 48;
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
         if bytes.len() < Self::LEN {
             return Err(ProgramError::InvalidInstructionData);
@@ -223,16 +225,18 @@ impl CreateMarketArgs {
         Ok(Self {
             market_id: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
             settlement_deadline: i64::from_le_bytes(bytes[8..16].try_into().unwrap()),
-            bump_ot_a: bytes[16],
-            bump_ot_b: bytes[17],
-            tier: bytes[18],
-            has_custom_meta: bytes[19],
-            name_a_len: u16::from_le_bytes(bytes[20..22].try_into().unwrap()),
-            symbol_a_len: u16::from_le_bytes(bytes[22..24].try_into().unwrap()),
-            name_b_len: u16::from_le_bytes(bytes[24..26].try_into().unwrap()),
-            symbol_b_len: u16::from_le_bytes(bytes[26..28].try_into().unwrap()),
-            uri_a_len: u16::from_le_bytes(bytes[28..30].try_into().unwrap()),
-            uri_b_len: u16::from_le_bytes(bytes[30..32].try_into().unwrap()),
+            market_rent: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
+            mint_rent: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+            bump_ot_a: bytes[32],
+            bump_ot_b: bytes[33],
+            tier: bytes[34],
+            has_custom_meta: bytes[35],
+            name_a_len: u16::from_le_bytes(bytes[36..38].try_into().unwrap()),
+            symbol_a_len: u16::from_le_bytes(bytes[38..40].try_into().unwrap()),
+            name_b_len: u16::from_le_bytes(bytes[40..42].try_into().unwrap()),
+            symbol_b_len: u16::from_le_bytes(bytes[42..44].try_into().unwrap()),
+            uri_a_len: u16::from_le_bytes(bytes[44..46].try_into().unwrap()),
+            uri_b_len: u16::from_le_bytes(bytes[46..48].try_into().unwrap()),
         })
     }
 }
