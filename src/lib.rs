@@ -11,8 +11,11 @@ pub mod log;
 pub mod state;
 
 program_entrypoint!(process_instruction);
-nostd_panic_handler!();
-no_allocator!();
+
+solana_program::custom_heap_default!();
+
+/* nostd_panic_handler!();
+no_allocator!(); */
 
 pub fn process_instruction(
     program_id: &Address,

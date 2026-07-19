@@ -14,27 +14,6 @@ use solana_instruction_view::{InstructionAccount, InstructionView, cpi::invoke};
 
 use crate::state::{CreateMarketArgs, MarketState, MarketTier};
 
-// Token-2022 Structural Layout Byte Dimensions
-const MINT_BASE_SPACE: usize = 82;
-const EXTENSIONS_PADDING_AND_OFFSET: usize = 84;
-const METADATA_POINTER_SIZE: usize = 68; // Type(2) + Length(2) + Auth(32) + Addr(32)
-const METADATA_EXTENSION_BASE_SIZE: usize = 80; // Header + Core Field Mappings Base
-
-pub fn calculate_space(
-    enable_meta: bool,
-    name_len: usize,
-    symbol_len: usize,
-    uri_len: usize,
-) -> usize {
-    if !enable_meta {
-        return MINT_BASE_SPACE;
-    }
-    let extension_size =
-        METADATA_POINTER_SIZE + METADATA_EXTENSION_BASE_SIZE + name_len + symbol_len + uri_len;
-    let total = MINT_BASE_SPACE + EXTENSIONS_PADDING_AND_OFFSET + extension_size;
-    (total + 7) & !7 // Enforce strict 8-byte boundary alignment
-}
-
 pub fn process_create_market(
     program_id: &Address,
     accounts: &mut [AccountView],
@@ -131,7 +110,6 @@ pub fn process_create_market(
         Seed::from(&index_a),
         Seed::from(&bump_a),
     ];
-    let signer_a = Signer::from(&ot_a_seeds);
 
     let index_b = [1u8];
     let bump_b = [args.bump_ot_b];
@@ -141,7 +119,6 @@ pub fn process_create_market(
         Seed::from(&index_b),
         Seed::from(&bump_b),
     ];
-    let signer_b = Signer::from(&ot_b_seeds);
 
     let state_bump_slice = core::slice::from_ref(&market_bump);
     let state_seeds = [
@@ -164,18 +141,8 @@ pub fn process_create_market(
 
     let market_state_rent_space = MarketState::LEN as u64 + dynamic_strings_overhead;
 
-    let space_a = calculate_space(
-        args.has_custom_meta == 1,
-        args.name_a_len as usize,
-        args.symbol_a_len as usize,
-        args.uri_a_len as usize,
-    );
-    let space_b = calculate_space(
-        args.has_custom_meta == 1,
-        args.name_b_len as usize,
-        args.symbol_b_len as usize,
-        args.uri_b_len as usize,
-    );
+    let dynamic_mint_space_a = if args.has_custom_meta == 1 { 240 } else { 82 };
+    let dynamic_mint_space_b = if args.has_custom_meta == 1 { 240 } else { 82 };
 
     // 1. Initialize Market Configurations PDA
     CreateAccount {
@@ -186,27 +153,31 @@ pub fn process_create_market(
         owner: program_id,
     }
     .invoke_signed(&[state_signer])?;
+    pinocchio_log::log!("market pda created!");
 
-    // 2. Initialize Outcomes Ledger Accounts
+    // 2. Initialize Outcomes Ledger Accounts with exactly 240 bytes
     CreateAccount {
         from: creator,
         to: outcome_a_mint,
         lamports: args.mint_rent,
-        space: space_a as u64,
+        space: dynamic_mint_space_a,
         owner: token_program.address(),
     }
-    .invoke_signed(&[signer_a])?;
+    .invoke_signed(&[Signer::from(&ot_a_seeds)])?;
+    pinocchio_log::log!("mint a created!");
+
     CreateAccount {
         from: creator,
         to: outcome_b_mint,
         lamports: args.mint_rent,
-        space: space_b as u64,
+        space: dynamic_mint_space_b,
         owner: token_program.address(),
     }
-    .invoke_signed(&[signer_b])?;
+    .invoke_signed(&[Signer::from(&ot_b_seeds)])?;
+    pinocchio_log::log!("mint b created!");
 
     if args.has_custom_meta == 1 {
-        // Initialize Extension Metadata Pointers
+        // 3. Initialize Extension Metadata Pointers
         InitializeMetadataPointer {
             mint: outcome_a_mint,
             authority: Some(market_pda.address()),
@@ -214,6 +185,8 @@ pub fn process_create_market(
             token_program: token_program.address(),
         }
         .invoke()?;
+        pinocchio_log::log!("pointer a initialized");
+
         InitializeMetadataPointer {
             mint: outcome_b_mint,
             authority: Some(market_pda.address()),
@@ -221,9 +194,10 @@ pub fn process_create_market(
             token_program: token_program.address(),
         }
         .invoke()?;
+        pinocchio_log::log!("pointer b initialized");
     }
 
-    // Initialize Mints targeting the active signing Creator wallet as temporary manager
+    // 4. Initialize Mints parameters (this now completes successfully)
     InitializeMint2 {
         mint: outcome_a_mint,
         decimals: 6,
@@ -232,6 +206,8 @@ pub fn process_create_market(
         token_program: token_program.address(),
     }
     .invoke()?;
+    pinocchio_log::log!("init a complete");
+
     InitializeMint2 {
         mint: outcome_b_mint,
         decimals: 6,
@@ -240,9 +216,10 @@ pub fn process_create_market(
         token_program: token_program.address(),
     }
     .invoke()?;
+    pinocchio_log::log!("init b complete");
 
     if args.has_custom_meta == 1 {
-        // Execute Metadata Layout Formats using the official standard interface
+        // 5. Initialize Token Metadata strings (Token-2022 expands account sizes dynamically)
         let spl_ix_a = spl_token_metadata_interface::instruction::initialize(
             token_program.address(),
             outcome_a_mint.address(),
@@ -267,6 +244,7 @@ pub fn process_create_market(
             },
             &[&*outcome_a_mint, &*market_pda, &*outcome_a_mint, &*creator],
         )?;
+        pinocchio_log::log!("metadata TLV layout a initialized");
 
         let spl_ix_b = spl_token_metadata_interface::instruction::initialize(
             token_program.address(),
@@ -292,42 +270,41 @@ pub fn process_create_market(
             },
             &[&*outcome_b_mint, &*market_pda, &*outcome_b_mint, &*creator],
         )?;
+        pinocchio_log::log!("metadata TLV layout b initialized");
 
-        // Rotate Mint Authority from Creator over to the persistent Market PDA contract
+        // 6. Transfer Mint Management Privileges permanently over to the Market PDA
         let mut rotate_payload = [0u8; 35];
-        rotate_payload[0] = 6; // Discriminator 6: SetAuthority
-        rotate_payload[1] = 0; // AuthorityType: MintTokens
+        rotate_payload[0] = 6; // SetAuthority
+        rotate_payload[1] = 0; // MintTokens
         rotate_payload[2] = 1; // Option::Some
         rotate_payload[3..35].copy_from_slice(market_pda.address().as_ref());
 
-        let rotate_accounts = [
-            InstructionAccount::writable(outcome_a_mint.address()),
-            InstructionAccount::readonly(creator.address()),
-        ];
         invoke(
             &InstructionView {
                 program_id: token_program.address(),
-                accounts: &rotate_accounts,
+                accounts: &[
+                    InstructionAccount::writable(outcome_a_mint.address()),
+                    InstructionAccount::readonly(creator.address()),
+                ],
                 data: &rotate_payload,
             },
             &[&*outcome_a_mint, &*creator],
         )?;
-
-        let rotate_accounts_b = [
-            InstructionAccount::writable(outcome_b_mint.address()),
-            InstructionAccount::readonly(creator.address()),
-        ];
         invoke(
             &InstructionView {
                 program_id: token_program.address(),
-                accounts: &rotate_accounts_b,
+                accounts: &[
+                    InstructionAccount::writable(outcome_b_mint.address()),
+                    InstructionAccount::readonly(creator.address()),
+                ],
                 data: &rotate_payload,
             },
             &[&*outcome_b_mint, &*creator],
         )?;
+        pinocchio_log::log!("mint management rights rotated to market pda");
     }
 
-    // Bare-Metal Memory Field Mapping Serialization
+    // 7. Serialize On-Chain Primitive Fields
     unsafe {
         let data_slice = market_pda.borrow_unchecked_mut();
         let state_mut = &mut *(data_slice.as_mut_ptr() as *mut MarketState);
