@@ -12,14 +12,6 @@ use pinocchio_token_2022::instructions::{
 };
 use solana_instruction_view::{InstructionAccount, InstructionView, cpi::invoke};
 
-#[repr(C)]
-pub struct PingMintArgs {
-    pub name_len: u16,
-    pub symbol_len: u16,
-    pub uri_len: u16,
-    pub rent_lamports: u64,
-}
-
 pub fn process_ping(
     _program_id: &Address,
     accounts: &mut [AccountView],
@@ -32,6 +24,7 @@ pub fn process_ping(
         diagnostic_mint,
         system_program,
         token_2022_program,
+        rent_sysvar,
         ..,
     ] = accounts
     else {
@@ -42,12 +35,11 @@ pub fn process_ping(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // Unpack lengths from the first 14 bytes of the data stream
     if instruction_data.len() < 15 {
         return Err(ProgramError::InvalidInstructionData);
     }
 
-    // Skip the first byte (the instruction discriminator '9')
+    // Slice off the first byte discriminator since the entrypoint passes the entire vector
     let payload = &instruction_data[1..];
 
     let name_len = u16::from_le_bytes(payload[0..2].try_into().unwrap()) as usize;
@@ -57,35 +49,26 @@ pub fn process_ping(
 
     let mut offset = 14;
     let name = core::str::from_utf8(&payload[offset..offset + name_len])
-        .map_err(|_| ProgramError::InvalidInstructionData)?;
+        .map_err(|_| ProgramError::InvalidInstructionData)?
+        .to_string();
     offset += name_len;
 
     let symbol = core::str::from_utf8(&payload[offset..offset + symbol_len])
-        .map_err(|_| ProgramError::InvalidInstructionData)?;
+        .map_err(|_| ProgramError::InvalidInstructionData)?
+        .to_string();
     offset += symbol_len;
 
     let uri = core::str::from_utf8(&payload[offset..offset + uri_len])
-        .map_err(|_| ProgramError::InvalidInstructionData)?;
+        .map_err(|_| ProgramError::InvalidInstructionData)?
+        .to_string();
 
-    solana_program::msg!(
-        "🔍 [Ping Target] Name: '{}', Symbol: '{}', URI: '{}'",
-        name,
-        symbol,
-        uri
-    );
-
-    // Calculate the precise, unpadded byte length required by Token-2022
-    // ExtensionType::try_calculate_account_len::<Mint>(&[ExtensionType::MetadataPointer]) maps exactly to 234 bytes
+    // Token-2022 Perfect Aligned Allocation Footprint Formula
     let total_account_space = 234 + 85 + name_len + symbol_len + uri_len;
     let aligned_space = (total_account_space + 7) & !7;
 
-    solana_program::msg!(
-        "📊 [Ping Sizing] Raw Space Needed: {}, Aligned Target Space Allocation: {}",
-        total_account_space,
-        aligned_space
-    );
+    solana_program::msg!("📊 Aligned Space Allocation: {} bytes", aligned_space);
 
-    // Stage 1: Provision the physical base storage account via System Program
+    // 1. Initialize Base Storage Account
     CreateAccount {
         from: payer,
         to: diagnostic_mint,
@@ -94,9 +77,8 @@ pub fn process_ping(
         owner: token_2022_program.address(),
     }
     .invoke()?;
-    pinocchio_log::log!("✔ Base account storage initialized successfully.");
 
-    // Stage 2: Initialize the Metadata Pointer Extension Layout
+    // 2. Initialize Metadata Pointer Extension
     InitializeMetadataPointer {
         mint: diagnostic_mint,
         authority: Some(payer.address()),
@@ -104,9 +86,8 @@ pub fn process_ping(
         token_program: token_2022_program.address(),
     }
     .invoke()?;
-    pinocchio_log::log!("✔ Extension metadata pointer layout bound.");
 
-    // Stage 3: Initialize the base parameters of the token mint asset layout
+    // 3. Initialize Base Mint State Parameters
     InitializeMint2 {
         mint: diagnostic_mint,
         decimals: 6,
@@ -115,18 +96,17 @@ pub fn process_ping(
         token_program: token_2022_program.address(),
     }
     .invoke()?;
-    pinocchio_log::log!("✔ Core mint parameters mapped safely.");
 
-    // Stage 4: Initialize variable-length Token Metadata fields within the account TLV blocks
+    // 4. Initialize Variable Length Metadata inside TLV Blocks
     let spl_ix = spl_token_metadata_interface::instruction::initialize(
         token_2022_program.address(),
         diagnostic_mint.address(),
         payer.address(),
         diagnostic_mint.address(),
         payer.address(),
-        name.to_string(),
-        symbol.to_string(),
-        uri.to_string(),
+        name,
+        symbol,
+        uri,
     );
 
     let accounts_view = [
@@ -144,9 +124,7 @@ pub fn process_ping(
         },
         &[&*diagnostic_mint, &*payer, &*diagnostic_mint, &*payer],
     )?;
-    pinocchio_log::log!(
-        "🚀 [Alley Ping Success]: Full extension token creation lifecycle completed!"
-    );
 
+    pinocchio_log::log!("🚀 [Alley Ping Success]: Diagnostic token lifecycle completed!");
     Ok(())
 }
