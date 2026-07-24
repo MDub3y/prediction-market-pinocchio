@@ -141,8 +141,44 @@ pub fn process_create_market(
 
     let market_state_rent_space = MarketState::LEN as u64 + dynamic_strings_overhead;
 
-    let dynamic_mint_space_a = if args.has_custom_meta == 1 { 240 } else { 82 };
-    let dynamic_mint_space_b = if args.has_custom_meta == 1 { 240 } else { 82 };
+    // Token-2022's `InitializeMint2` rejects the mint unless its account length is
+    // *exactly* `ExtensionType::try_calculate_account_len::<Mint>(&extensions)` for
+    // whatever extensions are already written into the account at that point in time.
+    // At this stage in the pipeline only the MetadataPointer extension has been
+    // initialized (the variable-length TokenMetadata TLV entry is appended later, via
+    // `alloc_and_serialize_variable_len_extension`, which reallocs the account itself).
+    // So the space passed to `CreateAccount` must match that fixed-size layout exactly.
+    //
+    // The TLV region does NOT start right after the 82-byte Mint struct: Token-2022
+    // places `AccountType` (and everything after it) at the fixed offset `Account::LEN`
+    // (165 bytes) for every base state (Mint, Account, Multisig alike), so that a
+    // program can distinguish an extended Mint/Account/Multisig purely by length. So:
+    //   165 (Account::LEN, not Mint::LEN) + 1 (AccountType) + 4 (TLV header)
+    //     + 64 (MetadataPointer: authority(32) + metadata_address(32)) = 234
+    // Any value that doesn't equal this exact figure causes `InitializeMint2` (or even
+    // the metadata-pointer `Initialize` CPI before it) to fail with `InvalidAccountData`,
+    // regardless of metadata string length. The account is still funded (via
+    // `args.mint_rent`, computed client-side) for its eventual larger size once the
+    // TokenMetadata extension is appended and the account reallocated, so no additional
+    // lamport top-up is required later in this instruction.
+    const BASE_MINT_LEN: u64 = 82;
+    const BASE_ACCOUNT_LEN: u64 = 165; // Token-2022's fixed TLV offset for every base state
+    const ACCOUNT_TYPE_LEN: u64 = 1;
+    const TLV_HEADER_LEN: u64 = 4;
+    const METADATA_POINTER_EXTENSION_LEN: u64 = 64; // authority(32) + metadata_address(32)
+    const METADATA_POINTER_MINT_LEN: u64 =
+        BASE_ACCOUNT_LEN + ACCOUNT_TYPE_LEN + TLV_HEADER_LEN + METADATA_POINTER_EXTENSION_LEN;
+
+    let dynamic_mint_space_a = if args.has_custom_meta == 1 {
+        METADATA_POINTER_MINT_LEN
+    } else {
+        BASE_MINT_LEN
+    };
+    let dynamic_mint_space_b = if args.has_custom_meta == 1 {
+        METADATA_POINTER_MINT_LEN
+    } else {
+        BASE_MINT_LEN
+    };
 
     // 1. Initialize Market Configurations PDA
     CreateAccount {
@@ -234,7 +270,7 @@ pub fn process_create_market(
             InstructionAccount::writable(outcome_a_mint.address()),
             InstructionAccount::readonly(market_pda.address()),
             InstructionAccount::readonly(outcome_a_mint.address()),
-            InstructionAccount::readonly(creator.address()),
+            InstructionAccount::readonly_signer(creator.address()),
         ];
         invoke(
             &InstructionView {
@@ -260,7 +296,7 @@ pub fn process_create_market(
             InstructionAccount::writable(outcome_b_mint.address()),
             InstructionAccount::readonly(market_pda.address()),
             InstructionAccount::readonly(outcome_b_mint.address()),
-            InstructionAccount::readonly(creator.address()),
+            InstructionAccount::readonly_signer(creator.address()),
         ];
         invoke(
             &InstructionView {
@@ -284,7 +320,7 @@ pub fn process_create_market(
                 program_id: token_program.address(),
                 accounts: &[
                     InstructionAccount::writable(outcome_a_mint.address()),
-                    InstructionAccount::readonly(creator.address()),
+                    InstructionAccount::readonly_signer(creator.address()),
                 ],
                 data: &rotate_payload,
             },
@@ -295,7 +331,7 @@ pub fn process_create_market(
                 program_id: token_program.address(),
                 accounts: &[
                     InstructionAccount::writable(outcome_b_mint.address()),
-                    InstructionAccount::readonly(creator.address()),
+                    InstructionAccount::readonly_signer(creator.address()),
                 ],
                 data: &rotate_payload,
             },
