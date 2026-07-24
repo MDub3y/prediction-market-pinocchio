@@ -36,18 +36,19 @@ pub fn process_claim_winnings(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    let winning_mint_target = unsafe {
+    let (winning_mint_target, winning_outcome) = unsafe {
         let data = market_pda.borrow_unchecked();
         let state = MarketState::from_bytes(&data)?;
 
         if state.market_status != 2 || state.is_settled != 1 {
             return Err(ProgramError::InvalidArgument);
         }
-        if state.winning_outcome == 0 {
+        let mint = if state.winning_outcome == 0 {
             state.outcome_a_mint.clone()
         } else {
             state.outcome_b_mint.clone()
-        }
+        };
+        (mint, state.winning_outcome)
     };
 
     if *winning_mint.address() != winning_mint_target {
@@ -89,7 +90,11 @@ pub fn process_claim_winnings(
         let m_data = market_user_state.borrow_unchecked_mut();
         let market_user = &mut *(m_data.as_mut_ptr() as *mut MarketUserState);
 
-        if winning_mint_target == market_user.market_pda {
+        // BUGFIX: this used to compare `winning_mint_target` (a mint address) against
+        // `market_user.market_pda` (the market PDA address) — two values that can never
+        // be equal — so it always fell into the ot_b branch regardless of which outcome
+        // actually won. Branch on the market's actual winning_outcome instead.
+        if winning_outcome == 0 {
             if market_user.ot_a_balance > 0 {
                 total_winnings_to_credit += market_user.ot_a_balance;
                 market_user.ot_a_balance = 0;

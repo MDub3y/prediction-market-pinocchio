@@ -6,6 +6,7 @@ use pinocchio::{
     cpi::{Seed, Signer},
     error::ProgramError,
 };
+use pinocchio_associated_token_account::instructions::Create as CreateAssociatedTokenAccount;
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token_2022::instructions::{
     InitializeMint2, metadata_pointer::Initialize as InitializeMetadataPointer,
@@ -28,15 +29,25 @@ pub fn process_create_market(
         outcome_a_mint,
         outcome_b_mint,
         collateral_mint,
-        _system_program,
+        system_program,
         token_program,
-        _associated_token_program,
-        _oracle_authority_acc,
+        _associated_token_program, // must still be present in this instruction's accounts
+        // for the Associated Token Program CPI below to resolve, even though pinocchio's
+        // `Create` helper doesn't take it as a named field.
+        collateral_token_program,
+        oracle_authority_acc,
         ..,
     ] = accounts
     else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
+
+    // deposit_collateral's Transfer CPI is hardcoded to the legacy Token program (see
+    // deposit_collateral.rs), so the collateral vault must always be created under it —
+    // regardless of which token program the outcome mints use.
+    if collateral_token_program.address() != &pinocchio_token::ID {
+        return Err(ProgramError::IncorrectProgramId);
+    }
 
     let args = CreateMarketArgs::from_bytes(instruction_data)?;
     if !creator.is_signer() {
@@ -190,6 +201,22 @@ pub fn process_create_market(
     }
     .invoke_signed(&[state_signer])?;
     pinocchio_log::log!("market pda created!");
+
+    // 1b. Initialize the collateral vault — a standard associated token account owned by
+    // the market PDA, under the legacy Token program (see the collateral_token_program
+    // check above). Previously this account was never created on-chain at all; its
+    // address was only recorded in MarketState, silently breaking every subsequent
+    // deposit_collateral call.
+    CreateAssociatedTokenAccount {
+        funding_account: creator,
+        account: collateral_vault,
+        wallet: market_pda,
+        mint: collateral_mint,
+        system_program,
+        token_program: collateral_token_program,
+    }
+    .invoke()?;
+    pinocchio_log::log!("collateral vault created!");
 
     // 2. Initialize Outcomes Ledger Accounts with exactly 240 bytes
     CreateAccount {
@@ -345,7 +372,11 @@ pub fn process_create_market(
         let data_slice = market_pda.borrow_unchecked_mut();
         let state_mut = &mut *(data_slice.as_mut_ptr() as *mut MarketState);
         state_mut.creator = creator.address().clone();
-        state_mut.oracle_authority = crate::instructions::resolve_market::TXLINE_PROGRAM_ID.clone();
+        // Trusted-keeper oracle model: whichever pubkey is passed as
+        // `oracle_authority_acc` is the only signer that can ever resolve this specific
+        // market (see resolve_market.rs). Doesn't need to be a signer here — only at
+        // resolution time.
+        state_mut.oracle_authority = oracle_authority_acc.address().clone();
         state_mut.market_id = args.market_id;
         state_mut.settlement_deadline = args.settlement_deadline;
         state_mut.collateral_vault = collateral_vault.address().clone();

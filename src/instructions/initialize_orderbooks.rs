@@ -101,6 +101,10 @@ pub fn process_initialize_orderbooks(
         let state_mut = &mut *(data_slice.as_mut_ptr() as *mut MarketState);
         state_mut.orderbook_a = orderbook_a.address().clone();
         state_mut.orderbook_b = orderbook_b.address().clone();
+        // Market becomes tradeable/resolvable once its orderbooks exist. Without this,
+        // resolve_market's `market_status == 1` gate could never be satisfied by any
+        // market created through the normal flow.
+        state_mut.market_status = 1;
     }
 
     Ok(())

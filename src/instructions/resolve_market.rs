@@ -1,17 +1,24 @@
-use crate::state::MarketState;
+use crate::state::{MarketState, ResolveMarketArgs};
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
 
-pub const TXLINE_PROGRAM_ID: Address = Address::new_from_array([
-    0x56, 0x5c, 0x64, 0x1d, 0x93, 0x76, 0x82, 0xd8, 0x92, 0x4f, 0x6b, 0xec, 0x7f, 0x18, 0xda, 0x3d,
-    0x42, 0x13, 0xaa, 0xd5, 0x76, 0x1b, 0x81, 0x98, 0x6e, 0x34, 0x7a, 0x22, 0xbc, 0x15, 0xee, 0x1a,
-]);
-
+/// Minimal trusted-keeper oracle model: the pubkey recorded as a market's
+/// `oracle_authority` (set once, at `create_market` time, from the
+/// `oracle_authority_acc` account) is the only party that can ever resolve that
+/// market. The keeper verifies the real-world event result off-chain and signs
+/// this instruction with the winning outcome.
+///
+/// This intentionally keeps the on-chain trust surface to a single signer check.
+/// Swapping in a decentralized oracle (Switchboard, Pyth, UMA, a DAO vote, a
+/// multisig, etc.) later only requires changing what `oracle_authority` is set to
+/// at market-creation time (e.g. a program-owned PDA that itself enforces
+/// multi-party attestation) — the check here (`keeper_signer == oracle_authority`
+/// and `keeper_signer.is_signer()`) does not need to change.
 pub fn process_resolve_market(
     _program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let [keeper_signer, market_pda, txline_data_account, ..] = accounts else {
+    let [keeper_signer, market_pda, ..] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -19,18 +26,9 @@ pub fn process_resolve_market(
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    if txline_data_account.owner() != &TXLINE_PROGRAM_ID {
-        return Err(ProgramError::InvalidAccountOwner);
-    }
-
-    let txline_raw_data = unsafe { txline_data_account.borrow_unchecked() };
-
-    let target_match_id = u64::from_le_bytes(txline_raw_data[0..8].try_into().unwrap());
-    let match_is_completed = txline_raw_data[8]; // 1 = Match Finished, 0 = In Progress
-    let verified_winning_index = txline_raw_data[9]; // 0 = Home/Yes, 1 = Away/No
-
-    if match_is_completed != 1 {
-        return Err(ProgramError::Custom(301)); // Match has not concluded yet
+    let args = ResolveMarketArgs::from_bytes(instruction_data)?;
+    if args.winning_outcome > 1 {
+        return Err(ProgramError::InvalidArgument);
     }
 
     unsafe {
@@ -41,17 +39,15 @@ pub fn process_resolve_market(
             return Err(ProgramError::InvalidArgument);
         }
 
-        if state_mut.market_id != target_match_id {
-            return Err(ProgramError::Custom(302));
+        if keeper_signer.address() != &state_mut.oracle_authority {
+            return Err(ProgramError::IncorrectAuthority);
         }
 
         state_mut.is_settled = 1;
-        state_mut.winning_outcome = verified_winning_index;
+        state_mut.winning_outcome = args.winning_outcome;
         state_mut.market_status = 2; // Move state variable flag to Settled
     }
 
-    pinocchio_log::log!(
-        "🎉 [Alley]: Market finalized trustlessly via verifiable data receipt parameters!"
-    );
+    pinocchio_log::log!("🎉 [Alley]: Market resolved by its configured oracle authority.");
     Ok(())
 }

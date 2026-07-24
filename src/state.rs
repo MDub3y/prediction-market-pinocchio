@@ -383,3 +383,20 @@ impl ClaimFundsArgs {
         Ok(Self { outcome: bytes[0] })
     }
 }
+
+#[repr(C)]
+pub struct ResolveMarketArgs {
+    pub winning_outcome: u8,
+}
+
+impl ResolveMarketArgs {
+    pub const LEN: usize = 1;
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProgramError> {
+        if bytes.len() < Self::LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        Ok(Self {
+            winning_outcome: bytes[0],
+        })
+    }
+}

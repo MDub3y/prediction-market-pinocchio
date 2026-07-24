@@ -19,7 +19,7 @@ pub fn process_deposit_collateral(
         user_token_account,
         collateral_vault,
         _system_program,
-        _token_program,
+        token_program,
         ..,
     ] = accounts
     else {
@@ -29,6 +29,15 @@ pub fn process_deposit_collateral(
     let args = DepositCollateralArgs::from_bytes(instruction_data)?;
     if !user.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    // The Transfer CPI below is hardcoded to the legacy Token program (`pinocchio_token`),
+    // so the passed `token_program` account MUST actually be it — otherwise the client
+    // has a mint/vault under a different token program than the one this instruction can
+    // ever move funds through, which used to fail confusingly deep inside the CPI instead
+    // of with a clear error here.
+    if token_program.address() != &pinocchio_token::ID {
+        return Err(ProgramError::IncorrectProgramId);
     }
 
     let state_raw_seeds: &[&[u8]] = &[
