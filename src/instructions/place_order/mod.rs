@@ -14,12 +14,42 @@ use pinocchio::{
 };
 use pinocchio_system::instructions::CreateAccount;
 
+/// Resolves a maker's `MarketUserState` account by scanning the client-supplied
+/// "remaining accounts" for a pubkey match against the seat's recorded
+/// `market_user_state`, instead of indexing `remaining[seat_idx]` directly.
+///
+/// The old index-based scheme required the client to pad the account list with a
+/// placeholder for every *intervening* seat index up to the highest one touched, even
+/// if only a couple of makers were actually crossed — which made transactions blow
+/// Solana's 1232-byte limit at roughly 25 touched makers, far short of what a
+/// Medium/Large tier orderbook (1024/4096 seats) needs to be usable. Since
+/// `TraderSeat::market_user_state` already carries the exact pubkey to look for, the
+/// client only needs to supply accounts for makers actually being crossed, in any order,
+/// and this scans for it. That trades an O(1) index for an O(k) scan over k supplied
+/// accounts (bounded by what fits in a transaction / compute budget anyway).
+pub(crate) fn find_maker_account<'a>(
+    remaining: &'a mut [AccountView],
+    target: &Address,
+) -> Result<&'a mut AccountView, ProgramError> {
+    remaining
+        .iter_mut()
+        .find(|acc| acc.address() == target)
+        .ok_or(ProgramError::NotEnoughAccountKeys)
+}
+
 pub fn process_place_order(
     program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    if accounts.len() < 7 {
+    // 6 is the actual minimum the raw-pointer destructure below reads (indices 0-5).
+    // Previously required >=7, a leftover from the old index-based maker-lookup scheme
+    // that forced every order — including Split/Merge and single-book Market orders,
+    // neither of which ever touch a maker account — to pad the account list with an
+    // unused placeholder. Now that makers are resolved by pubkey scan (see
+    // find_maker_account below), only orders that actually cross resting makers need any
+    // accounts beyond this base set.
+    if accounts.len() < 6 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
 

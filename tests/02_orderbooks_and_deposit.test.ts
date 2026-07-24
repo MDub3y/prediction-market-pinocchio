@@ -1,5 +1,4 @@
 import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
-import { createAssociatedTokenAccountInstruction, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { expect, test, describe } from "bun:test";
 import { FailedTransactionMetadata } from "litesvm";
 import {
@@ -26,12 +25,11 @@ function setUpMarket(tier: number, marketId: bigint) {
     const svm = freshSvm();
     const { payer, collateralMint } = setupPayerAndMint(svm);
     const { marketPda, outcomeAMint, outcomeBMint, bumpOtA, bumpOtB } = marketPdas(marketId);
-    const vault = collateralVaultAta(marketPda, collateralMint);
+    const vault = collateralVaultAta(collateralMint);
 
     const createIx = buildCreateMarketIx({
         payer: payer.publicKey,
         marketPda,
-        collateralVault: vault,
         outcomeAMint,
         outcomeBMint,
         collateralMint,
@@ -47,7 +45,7 @@ function setUpMarket(tier: number, marketId: bigint) {
     tx.recentBlockhash = svm.latestBlockhash();
     tx.feePayer = payer.publicKey;
     tx.sign(payer);
-    sendOk(svm, tx, "create_market"); // also creates the collateral vault ATA on-chain now
+    sendOk(svm, tx, "create_market");
 
     return { svm, payer, collateralMint, marketPda, outcomeAMint, outcomeBMint, vault };
 }
@@ -105,6 +103,54 @@ describe("initialize_orderbooks", () => {
 });
 
 describe("deposit_collateral", () => {
+    test("lazily creates the global vault on the very first deposit, then reuses it", () => {
+        const { svm, payer, collateralMint, vault } = setUpMarket(1, 200n);
+        expect(svm.getAccount(vault)).toBeNull(); // not created by create_market
+
+        const { user, tokenAccount } = createFundedUser(svm, collateralMint, payer, 500_000_000n);
+        deposit(svm, user, collateralMint, vault, tokenAccount, 100_000_000n);
+
+        const vaultAcct = svm.getAccount(vault);
+        expect(vaultAcct).not.toBeNull();
+        expect(vaultAcct!.owner.toBase58()).toBe("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+        console.log("✅ Verified: deposit_collateral lazily creates the global vault on first use.");
+    });
+
+    test("a second market's deposits land in the SAME vault as the first market's", () => {
+        const svm = freshSvm();
+        const { payer, collateralMint } = setupPayerAndMint(svm);
+        const vault = collateralVaultAta(collateralMint);
+
+        function createMarket(marketId: bigint) {
+            const { marketPda, outcomeAMint, outcomeBMint, bumpOtA, bumpOtB } = marketPdas(marketId);
+            const ix = buildCreateMarketIx({
+                payer: payer.publicKey, marketPda, outcomeAMint, outcomeBMint, collateralMint, marketId,
+                settlementDeadline: BigInt(Math.floor(Date.now() / 1000) + 86400),
+                marketRent: svm.minimumBalanceForRentExemption(296n),
+                mintRent: svm.minimumBalanceForRentExemption(82n),
+                bumpOtA, bumpOtB, tier: 0,
+            });
+            const tx = new Transaction().add(ix);
+            tx.recentBlockhash = svm.latestBlockhash();
+            tx.feePayer = payer.publicKey;
+            tx.sign(payer);
+            sendOk(svm, tx, `create_market ${marketId}`);
+        }
+        createMarket(300n);
+        createMarket(301n);
+
+        const { user: userA, tokenAccount: taA } = createFundedUser(svm, collateralMint, payer, 500_000_000n);
+        deposit(svm, userA, collateralMint, vault, taA, 40_000_000n); // creates the vault (market 300 context doesn't matter -- deposit_collateral takes no market_pda)
+
+        const { user: userB, tokenAccount: taB } = createFundedUser(svm, collateralMint, payer, 500_000_000n);
+        deposit(svm, userB, collateralMint, vault, taB, 25_000_000n);
+
+        const vaultAcct = svm.getAccount(vault)!;
+        const vaultAmount = Buffer.from(vaultAcct.data).readBigUInt64LE(64);
+        expect(vaultAmount).toBe(65_000_000n); // both users' deposits landed in the one shared vault
+        console.log("✅ Verified: deposits from users trading on different markets accumulate in the single shared vault.");
+    });
+
     test("creates PlatformUserState on first deposit and accumulates on repeat deposits", () => {
         const { svm, payer, collateralMint, vault } = setUpMarket(1, 200n);
         const { user, tokenAccount } = createFundedUser(svm, collateralMint, payer, 500_000_000n);
@@ -139,6 +185,7 @@ describe("deposit_collateral", () => {
             platformUserState: platformState,
             userTokenAccount: tokenAccount,
             collateralVault: vault,
+            collateralMint,
             amount: 999_999_999n,
             bumpUserState: bump,
         });
@@ -152,33 +199,30 @@ describe("deposit_collateral", () => {
         const res = svm.sendTransaction(tx);
         expect(res instanceof FailedTransactionMetadata).toBe(true);
     });
-});
 
-describe("frontend/on-chain token-program mismatch (regression)", () => {
-    test("the vault address alley-web actually derives (seeded with TOKEN_PROGRAM_2022_ID) cannot be created for a legacy-Token collateral mint", () => {
-        // app/create/page.tsx derives collateralVault as:
-        //   findProgramAddressSync([marketPda, TOKEN_PROGRAM_2022_ID, USDC_DEV_MINT], ASSOCIATED_TOKEN_PROGRAM_ID)
-        // but USDC_DEV_MINT (like any `spl-token create-token` mint) is owned by the
-        // LEGACY Tokenkeg program, and deposit_collateral.rs's Transfer CPI is hardcoded
-        // to the legacy program too. Reproduce exactly what the frontend does and show
-        // the resulting "vault" can never actually be initialized as a token account for
-        // that mint — the Associated Token Program instruction fails immediately.
-        const svm = freshSvm();
-        const { payer, collateralMint } = setupPayerAndMint(svm); // legacy-Token mint
-        const marketId = 999n;
-        const { marketPda } = marketPdas(marketId);
+    test("rejects a vault address that doesn't match the canonical derivation", () => {
+        const { svm, payer, collateralMint } = setUpMarket(1, 202n);
+        const { user, tokenAccount } = createFundedUser(svm, collateralMint, payer, 500_000_000n);
+        const [platformState, bump] = platformUserStatePda(user.publicKey);
+        const wrongVault = PublicKey.unique();
 
-        const frontendDerivedVault = collateralVaultAta(marketPda, collateralMint, TOKEN_2022_PROGRAM_ID);
-
+        const ix = buildDepositIx({
+            user: user.publicKey,
+            platformUserState: platformState,
+            userTokenAccount: tokenAccount,
+            collateralVault: wrongVault,
+            collateralMint,
+            amount: 1_000n,
+            bumpUserState: bump,
+        });
         const tx = new Transaction().add(
-            createAssociatedTokenAccountInstruction(payer.publicKey, frontendDerivedVault, marketPda, collateralMint, TOKEN_2022_PROGRAM_ID)
+            ix,
+            SystemProgram.transfer({ fromPubkey: user.publicKey, toPubkey: platformState, lamports: 3_000_000 })
         );
         tx.recentBlockhash = svm.latestBlockhash();
-        tx.feePayer = payer.publicKey;
-        tx.sign(payer);
+        tx.feePayer = user.publicKey;
+        tx.sign(user);
         const res = svm.sendTransaction(tx);
-
         expect(res instanceof FailedTransactionMetadata).toBe(true);
-        console.log("⚠️  CONFIRMED: app/create/page.tsx's collateralVault derivation (seeded with TOKEN_PROGRAM_2022_ID) is not a valid ATA for the legacy-Token USDC_DEV_MINT — it can never be created.");
     });
 });

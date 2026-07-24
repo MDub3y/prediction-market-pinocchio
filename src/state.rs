@@ -2,6 +2,33 @@ use pinocchio::{Address, error::ProgramError};
 
 pub const NULL_ADDRESS: Address = Address::new_from_array([0u8; 32]);
 
+/// A single collateral vault is shared across every market on the platform, mirroring
+/// `PlatformUserState` (already a global, not per-market, ledger — `deposit_collateral`
+/// doesn't even take a `market_pda`). Deposits fund trading across every market from one
+/// balance, so there is exactly one vault, owned by this authority PDA, rather than one
+/// per market. Derived on-chain (not passed as an argument) so every caller — the
+/// program itself, the client, and any future instruction — computes the identical
+/// canonical address.
+pub fn derive_collateral_authority(program_id: &Address) -> (Address, u8) {
+    Address::find_program_address(&[b"collateral_authority"], program_id)
+}
+
+/// The vault is a standard associated token account owned by `derive_collateral_authority`,
+/// under the legacy Token program (see deposit_collateral.rs — its Transfer CPI is
+/// hardcoded to it) for whatever mint is passed as `collateral_mint`.
+pub fn derive_collateral_vault(program_id: &Address, collateral_mint: &Address) -> Address {
+    let (collateral_authority, _bump) = derive_collateral_authority(program_id);
+    let (vault, _vault_bump) = Address::find_program_address(
+        &[
+            collateral_authority.as_ref(),
+            pinocchio_token::ID.as_ref(),
+            collateral_mint.as_ref(),
+        ],
+        &pinocchio_associated_token_account::ID,
+    );
+    vault
+}
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum MarketTier {
     Small = 0,

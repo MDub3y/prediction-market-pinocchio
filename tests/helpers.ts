@@ -271,14 +271,18 @@ export function marketPdas(marketId: bigint) {
     return { marketPda, marketBump, outcomeAMint, bumpOtA, outcomeBMint, bumpOtB, marketIdBuf };
 }
 
-// Derived with the LEGACY token program, matching the collateral mint's real owner
-// (see setupPayerAndMint comment). NOTE: alley-web's app/create/page.tsx currently
-// derives this same address using TOKEN_PROGRAM_2022_ID instead — see the dedicated
-// regression test in 02_orderbooks_and_deposit.test.ts that proves that derivation
-// can never correspond to a valid token account for a legacy-program mint.
-export function collateralVaultAta(marketPda: PublicKey, collateralMint: PublicKey, tokenProgram: PublicKey = TOKEN_PROGRAM_ID): PublicKey {
+// The collateral vault is now a single account shared across every market (mirrors
+// PlatformUserState already being global), owned by a dedicated authority PDA, under
+// the LEGACY token program (matching deposit_collateral's hardcoded Transfer CPI).
+// Mirrors derive_collateral_authority / derive_collateral_vault in src/state.rs.
+export function collateralAuthorityPda(): PublicKey {
+    const [authority] = PublicKey.findProgramAddressSync([Buffer.from("collateral_authority")], PROGRAM_ID);
+    return authority;
+}
+
+export function collateralVaultAta(collateralMint: PublicKey, tokenProgram: PublicKey = TOKEN_PROGRAM_ID): PublicKey {
     const [vault] = PublicKey.findProgramAddressSync(
-        [marketPda.toBuffer(), tokenProgram.toBuffer(), collateralMint.toBuffer()],
+        [collateralAuthorityPda().toBuffer(), tokenProgram.toBuffer(), collateralMint.toBuffer()],
         ASSOCIATED_TOKEN_PROGRAM_ID
     );
     return vault;
@@ -287,7 +291,6 @@ export function collateralVaultAta(marketPda: PublicKey, collateralMint: PublicK
 export function buildCreateMarketIx(params: {
     payer: PublicKey;
     marketPda: PublicKey;
-    collateralVault: PublicKey;
     outcomeAMint: PublicKey;
     outcomeBMint: PublicKey;
     collateralMint: PublicKey;
@@ -312,17 +315,17 @@ export function buildCreateMarketIx(params: {
     data.writeUInt8(0, 36); // has_custom_meta
     // name/symbol/uri lens all zero, no trailing strings
 
+    // NOTE: the collateral vault is no longer part of create_market's account list at
+    // all — it's a single account shared across every market, derived on-chain and
+    // lazily created by deposit_collateral (see derive_collateral_vault / helpers below).
     const keys = [
         { pubkey: params.payer, isSigner: true, isWritable: true },
         { pubkey: params.marketPda, isSigner: false, isWritable: true },
-        { pubkey: params.collateralVault, isSigner: false, isWritable: true },
         { pubkey: params.outcomeAMint, isSigner: false, isWritable: true },
         { pubkey: params.outcomeBMint, isSigner: false, isWritable: true },
         { pubkey: params.collateralMint, isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // collateral_token_program (legacy) — now required for the on-chain vault-ATA creation CPI
         { pubkey: params.oracleAuthority ?? params.payer, isSigner: false, isWritable: false }, // oracle_authority_acc — recorded as this market's trusted keeper pubkey
     ];
     return new TransactionInstruction({ keys, programId: PROGRAM_ID, data });
@@ -350,6 +353,7 @@ export function buildDepositIx(params: {
     platformUserState: PublicKey;
     userTokenAccount: PublicKey;
     collateralVault: PublicKey;
+    collateralMint: PublicKey;
     amount: bigint;
     bumpUserState: number;
 }): TransactionInstruction {
@@ -362,8 +366,11 @@ export function buildDepositIx(params: {
         { pubkey: params.platformUserState, isSigner: false, isWritable: true },
         { pubkey: params.userTokenAccount, isSigner: false, isWritable: true },
         { pubkey: params.collateralVault, isSigner: false, isWritable: true },
+        { pubkey: params.collateralMint, isSigner: false, isWritable: false },
+        { pubkey: collateralAuthorityPda(), isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // accepted but ignored on-chain
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     ];
     return new TransactionInstruction({ keys, programId: PROGRAM_ID, data });
 }
@@ -383,7 +390,10 @@ export function buildPlaceOrderIx(params: {
     quantity: bigint;
     orderId: bigint;
     bumpMarketUser: number;
-    remainingAccounts?: PublicKey[]; // MarketUserState PDAs indexed by seat_idx, aligned starting at base index
+    // MarketUserState PDAs of makers that might be crossed. As of the pubkey-scan maker
+    // lookup, these can be passed in ANY order and only for makers actually expected to
+    // be touched — no more padding for skipped seat indices.
+    remainingAccounts?: PublicKey[];
 }): TransactionInstruction {
     const data = Buffer.alloc(1 + 21);
     data.writeUInt8(IX.PlaceOrder, 0);
@@ -405,10 +415,8 @@ export function buildPlaceOrderIx(params: {
     if (!params.singleBook) {
         keys.push({ pubkey: params.orderbookB, isSigner: false, isWritable: true });
     }
-    // NOTE: place_order has no system_program account slot at all — pinocchio_system's
-    // CreateAccount CPI hardcodes the System Program address internally. Maker accounts
-    // must start immediately after the fixed prefix (index 6 for limit orders / index 5
-    // for single-book market orders), matching limit.rs's/market.rs's `accounts.get_mut(N + seat_idx)`.
+    // Maker accounts: looked up by pubkey scan (find_maker_account in mod.rs), so only
+    // the makers actually expected to be touched need to be included, in any order.
     for (const acc of params.remainingAccounts ?? []) {
         keys.push({ pubkey: acc, isSigner: false, isWritable: true });
     }
@@ -416,16 +424,13 @@ export function buildPlaceOrderIx(params: {
     // still be present *somewhere* in the instruction's account list: pinocchio's CPI
     // (used for the on-demand `CreateAccount` of a first-time MarketUserState) requires
     // the callee program to be one of the accounts already provided to the invoking
-    // instruction, or the runtime rejects the CPI outright. Appending it after the real
-    // maker accounts keeps the `6 + seat_idx` (limit) / `5 + seat_idx` (market) addressing
-    // scheme intact for maker lookups.
+    // instruction, or the runtime rejects the CPI outright.
     keys.push({ pubkey: SystemProgram.programId, isSigner: false, isWritable: false });
-    // process_place_order (mod.rs) also gates on `accounts.len() < 7` for EVERY order
-    // type, before even branching on order_type — so even a Split/Merge with no maker
-    // accounts, or a single-book Market order (5 fixed accounts), must still pad the
-    // account list out to 7 entries or the whole instruction is rejected with
-    // NotEnoughAccountKeys.
-    while (keys.length < 7) {
+    // process_place_order (mod.rs) gates on `accounts.len() < 6` for EVERY order type
+    // (the minimum the raw-pointer destructure there actually reads) — pad only if the
+    // real account list (5 or 6 fixed + any maker accounts + system program) falls short,
+    // which only happens for Split/Merge or an empty single-book Market order.
+    while (keys.length < 6) {
         keys.push({ pubkey: params.marketPda, isSigner: false, isWritable: false });
     }
     return new TransactionInstruction({ keys, programId: PROGRAM_ID, data });
@@ -567,6 +572,7 @@ export function deposit(svm: LiteSVM, user: Keypair, collateralMint: PublicKey, 
         platformUserState,
         userTokenAccount,
         collateralVault,
+        collateralMint,
         amount,
         bumpUserState: bump,
     });
@@ -624,7 +630,10 @@ export function setupTradableMarket(tier: number, marketId: bigint, settlementDe
     const svm = freshSvm();
     const { payer, collateralMint } = setupPayerAndMint(svm);
     const { marketPda, outcomeAMint, outcomeBMint, bumpOtA, bumpOtB } = marketPdas(marketId);
-    const vault = collateralVaultAta(marketPda, collateralMint);
+    // Global vault: not created by create_market anymore, only derived/recorded — it's
+    // lazily created by whichever deposit_collateral call happens first in this SVM
+    // instance (see collateralVaultAta / buildDepositIx).
+    const vault = collateralVaultAta(collateralMint);
     const keeper = Keypair.generate();
     // litesvm's simulated clock starts at unix time 0, not real wall-clock time — anchor
     // the deadline to the VM's own clock, not Date.now(), or later advanceClockBy() calls
@@ -635,7 +644,6 @@ export function setupTradableMarket(tier: number, marketId: bigint, settlementDe
         buildCreateMarketIx({
             payer: payer.publicKey,
             marketPda,
-            collateralVault: vault,
             outcomeAMint,
             outcomeBMint,
             collateralMint,
@@ -652,7 +660,7 @@ export function setupTradableMarket(tier: number, marketId: bigint, settlementDe
     createTx.recentBlockhash = svm.latestBlockhash();
     createTx.feePayer = payer.publicKey;
     createTx.sign(payer);
-    sendOk(svm, createTx, "create_market"); // now also creates the collateral vault ATA on-chain
+    sendOk(svm, createTx, "create_market");
 
     const orderbookA = Keypair.generate();
     const orderbookB = Keypair.generate();

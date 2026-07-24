@@ -7,6 +7,7 @@ import {
     marketUserStatePda,
     buildPlaceOrderIx,
     readHeader,
+    readMarketUserState,
     sendOk,
     OrderType,
     Side,
@@ -73,30 +74,58 @@ describe("orderbook capacity limits (Small tier: 128 seats, 512 order nodes)", (
     }, 60_000);
 });
 
-describe("scaling concern: maker accounts required scales with seat index, not match count", () => {
-    test("crossing a resting order held by a high-index seat requires padding the account list up to that index — this blows past Solana's transaction size limit for realistic seat counts", () => {
-        // limit.rs / market.rs resolve makers via `accounts[BASE + maker_order.user_seat_idx]`
-        // — a raw positional index into the transaction's account list, not a lookup by
-        // pubkey. This means crossing an order resting in seat #400 requires the CLIENT
-        // to supply an account list at least 400+ entries long (with placeholder entries
-        // for every unused intervening seat index), regardless of how many orders are
-        // actually being matched. Demonstrate the actual byte cost of this concretely.
-        const SOLANA_TX_SIZE_LIMIT = 1232;
-        const PUBKEY_BYTES = 32;
-        const ACCOUNT_META_OVERHEAD = 1; // simplified: signature flags packed elsewhere; pubkeys dominate
+describe("scaling: account-scan fix vs inherent per-touched-maker cost", () => {
+    test("FIXED: crossing a maker resting in a HIGH seat index now costs just 1 account, not one-per-skipped-seat", () => {
+        // Previously, limit.rs / market.rs resolved makers via
+        // `accounts[BASE + maker_order.user_seat_idx]` — a raw positional index — so
+        // crossing an order resting in seat #50 required padding the account list with
+        // a placeholder for every UNUSED intervening seat 0..49, even if seat 50 was the
+        // only maker actually touched. Now that makers are resolved by pubkey scan
+        // (find_maker_account in mod.rs), only the maker actually being crossed needs to
+        // be included, regardless of its seat index.
+        const m = setupTradableMarket(0, 610n);
 
-        for (const seatIndex of [10, 50, 100, 400, 1023, 4095]) {
-            const accountsNeeded = 6 /* base accounts for a limit order */ + seatIndex + 1;
-            const approxBytes = accountsNeeded * (PUBKEY_BYTES + ACCOUNT_META_OVERHEAD);
-            const fits = approxBytes <= SOLANA_TX_SIZE_LIMIT;
-            console.log(`seat_idx=${seatIndex}: needs ${accountsNeeded} accounts (~${approxBytes} bytes of pubkeys alone) -> ${fits ? "fits" : "EXCEEDS"} the ${SOLANA_TX_SIZE_LIMIT}-byte tx limit`);
+        // Populate 50 filler makers (seat indices 0..49) resting at a DIFFERENT price
+        // that will never be touched, purely to push the target maker to a high seat index.
+        for (let i = 0; i < 50; i++) {
+            const { user, platformUserState } = depositForNewUser(m, 200_000_000n, 100_000_000n);
+            const res = placeLimit(m, user, platformUserState, Outcome.B, Side.Buy, 20, 1000n, BigInt(i + 1));
+            expect(res instanceof FailedTransactionMetadata).toBe(false);
         }
 
-        // Concretely build a real transaction that must reference a maker resting in seat #40
-        // (i.e. the 41st distinct maker to ever rest an order in this market) and show it
-        // already approaches/breaks the limit well before Large-tier seat counts (4096) are
-        // even remotely reached.
-        const m = setupTradableMarket(0, 602n);
+        // The 51st maker (seat index 50) rests at the price the taker will actually cross.
+        const target = depositForNewUser(m, 200_000_000n, 100_000_000n);
+        const targetMus = marketUserStatePda(m.marketPda, target.user.publicKey)[0];
+        const targetRes = placeLimit(m, target.user, target.platformUserState, Outcome.B, Side.Buy, 45, 1000n, 999n);
+        expect(targetRes instanceof FailedTransactionMetadata).toBe(false);
+
+        const bookB = Buffer.from(m.svm.getAccount(m.orderbookB.publicKey)!.data);
+        const header = readHeader(bookB);
+        expect(header.totalAllocatedSeats).toBe(51); // confirms the target really did land at seat index 50
+
+        // Cross it with a taker Buy A @ 55 (55+45=100 -> combo-mint match against the
+        // complementary book's resting Buy B @ 45), passing ONLY the target maker's
+        // account — no padding for seats 0..49.
+        const taker = depositForNewUser(m, 200_000_000n, 100_000_000n);
+        const res = placeLimit(m, taker.user, taker.platformUserState, Outcome.A, Side.Buy, 55, 1000n, 1000n, [targetMus]);
+        expect(res instanceof FailedTransactionMetadata).toBe(false);
+
+        const targetMusAfter = readMarketUserState(Buffer.from(m.svm.getAccount(targetMus)!.data));
+        expect(targetMusAfter.otBBalance).toBe(1000n); // the seat-50 maker's order was actually filled
+
+        console.log("✅ Verified: crossing a maker at seat index 50 required only 1 remaining account (the maker itself), not 50 placeholders — the account-scaling ceiling from seat-index padding is gone.");
+    });
+
+    test("the remaining, inherent cost: a transaction can still only touch ~25 DISTINCT makers at once (Solana's 1232-byte tx limit, not an addressing-scheme problem)", () => {
+        // This ceiling is unrelated to the seat-index padding bug fixed above: even with
+        // pubkey-scan lookup, crossing N distinct makers still needs N pubkeys (32 bytes
+        // each) in the transaction, and that's a hard, inherent Solana limit — not
+        // something any account-addressing scheme can remove. Included here so the two
+        // costs (padding waste, now fixed vs. per-touched-maker cost, inherent) aren't
+        // conflated.
+        const SOLANA_TX_SIZE_LIMIT = 1232;
+
+        const m = setupTradableMarket(0, 611n);
         const makers: PublicKey[] = [];
         const N = 45;
         for (let i = 0; i < N; i++) {
@@ -144,6 +173,6 @@ describe("scaling concern: maker accounts required scales with seat index, not m
             console.log(`⚠️  CONFIRMED: at ${firstFailureAt} touched makers the required account list (${firstFailureSize ?? "?"} bytes) already EXCEEDS Solana's hard 1232-byte transaction size limit — the instruction cannot be sent at all, regardless of compute budget.`);
         }
         expect(largestThatFits).toBeLessThan(N); // prove we actually hit the wall within this test's range
-        console.log("⚠️  Since maker accounts are addressed by raw seat index (not by which makers are actually touched), a popular price level with more resting distinct makers than this — or simply an unlucky high seat-index landing in a Medium/Large tier market (1024/4096 seats) — cannot be crossed by a single transaction under the current design, no matter how the client is written.");
+        console.log("⚠️  A popular price level with more than ~25 resting distinct makers can't be fully crossed by a single transaction. This is an inherent Solana transaction-size limit on how many maker pubkeys fit at all, not fixable by any account-addressing scheme — a client hitting this would need to cross the level over multiple transactions (partial fills), or the program would need a different mechanism entirely (e.g. netting/batched settlement) to avoid it.");
     });
 });

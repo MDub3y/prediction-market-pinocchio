@@ -152,14 +152,11 @@ describe("place_order: limit — complementary cross-book matching", () => {
         console.log("✅ Verified: complementary cross-book matching (Buy A + resting Buy B, prices summing to 100) mints both outcome legs correctly.");
     });
 
-    test("BUG: a resting Sell order can never be instantly matched by a limit order — it always just rests", () => {
-        // limit.rs only ever attempts crossing when args.side == 0 (Buy), and even then only
-        // against the *complementary* book's Buy-side directory (comp_price in 1..=99, which
-        // only ever indexes rows 0..99 i.e. Buy rows). A resting Sell (side=1, directory rows
-        // 100..199) is never read by the crossing loop, and a taker Sell (side=1) skips the
-        // crossing loop entirely (`if args.side == 0 && ...`). So two limit orders that should
-        // obviously cross — a resting Sell A @ 40 and an incoming Buy A @ 50 — never match via
-        // place_order's limit path; both simply end up resting.
+    test("FIXED: a resting Sell order is now instantly matched by an incoming Buy limit order (same-book crossing)", () => {
+        // limit.rs now mirrors market.rs's same-book bid/ask crossing (price-bounded),
+        // in addition to the existing complementary-book combo-mint cross for buys. A
+        // resting Sell A @ 40 and an incoming Buy A @ 50 now cross immediately instead of
+        // both just resting.
         const m = setupTradableMarket(0, 305n);
         const seller = depositForNewUser(m, 500_000_000n, 200_000_000n);
         const buyer = depositForNewUser(m, 500_000_000n, 200_000_000n);
@@ -180,16 +177,66 @@ describe("place_order: limit — complementary cross-book matching", () => {
 
         // seller rests a Sell A @ 40
         placeLimit(m, seller.user, seller.platformUserState, Outcome.A, Side.Sell, 40, 1_000_000n, 20n);
-        // buyer places a Buy A @ 50 (a normal exchange would cross these instantly: buyer pays <= their limit, seller receives >= their limit)
-        placeLimit(m, buyer.user, buyer.platformUserState, Outcome.A, Side.Buy, 50, 1_000_000n, 21n);
+        // buyer places a Buy A @ 50, referencing the seller's MarketUserState so the
+        // program can resolve it via the new pubkey-scan maker lookup
+        placeLimit(m, buyer.user, buyer.platformUserState, Outcome.A, Side.Buy, 50, 1_000_000n, 21n, [sellerMarketUserState]);
 
         const bookA = Buffer.from(m.svm.getAccount(m.orderbookA.publicKey)!.data);
         const sellLevel40 = readPriceLevel(bookA, Side.Sell, 40);
         const buyLevel50 = readPriceLevel(bookA, Side.Buy, 50);
 
-        // Both orders are still fully resting, unmatched -- confirms the gap.
-        expect(sellLevel40.head).not.toBe(0);
-        expect(buyLevel50.head).not.toBe(0);
-        console.log("⚠️  CONFIRMED BUG: resting Sell A@40 and incoming Buy A@50 did not cross via limit orders; both simply rest.");
+        // Both orders are now fully consumed -- nothing rests.
+        expect(sellLevel40.head).toBe(0);
+        expect(buyLevel50.head).toBe(0);
+
+        const buyerMus = readMarketUserState(Buffer.from(m.svm.getAccount(marketUserStatePda(m.marketPda, buyer.user.publicKey)[0])!.data));
+        expect(buyerMus.otABalance).toBe(1_000_000n);
+
+        // seller crossed at their own limit price (40): trade_collateral = 1_000_000 * 40 / 100 = 400_000
+        const sellerPState = readPlatformUserState(Buffer.from(m.svm.getAccount(seller.platformUserState)!.data));
+        // seller started with 200_000_000, spent 1_000_000 on the split (at price-equivalent 1:1, i.e. -1_000_000),
+        // then received trade_collateral + maker fee rebate back as collateral_claimable (not yet swept into
+        // collateral_available) -- so collateral_available here only reflects the split debit.
+        expect(sellerPState.collateralAvailable).toBe(200_000_000n - 1_000_000n);
+        const sellerMusAfter = readMarketUserState(Buffer.from(m.svm.getAccount(sellerMarketUserState)!.data));
+        expect(sellerMusAfter.collateralClaimable).toBeGreaterThan(0n); // trade proceeds + maker rebate, claimable via claim_funds
+
+        console.log("✅ Verified: resting Sell A@40 and incoming Buy A@50 now cross instantly via the limit-order path.");
+    });
+
+    test("FIXED: a resting Buy order is now instantly matched by an incoming Sell limit order (same-book crossing)", () => {
+        const m = setupTradableMarket(0, 306n);
+        const buyer = depositForNewUser(m, 500_000_000n, 200_000_000n);
+        const seller = depositForNewUser(m, 500_000_000n, 200_000_000n);
+
+        const buyerMarketUserState = marketUserStatePda(m.marketPda, buyer.user.publicKey)[0];
+        // buyer rests a Buy A @ 55
+        placeLimit(m, buyer.user, buyer.platformUserState, Outcome.A, Side.Buy, 55, 1_000_000n, 30n);
+
+        // seller needs outcome-A tokens to sell
+        const sellerMarketUserState = marketUserStatePda(m.marketPda, seller.user.publicKey)[0];
+        const splitIx = buildPlaceOrderIx({
+            user: seller.user.publicKey, marketPda: m.marketPda, platformUserState: seller.platformUserState,
+            marketUserState: sellerMarketUserState, orderbookA: m.orderbookA.publicKey, orderbookB: m.orderbookB.publicKey,
+            outcome: Outcome.A, side: Side.Buy, orderType: OrderType.Split, price: 0, quantity: 1_000_000n, orderId: 0n,
+            bumpMarketUser: marketUserStatePda(m.marketPda, seller.user.publicKey)[1],
+        });
+        const splitTx = new Transaction().add(splitIx);
+        splitTx.recentBlockhash = m.svm.latestBlockhash();
+        splitTx.feePayer = seller.user.publicKey;
+        splitTx.sign(seller.user);
+        sendOk(m.svm, splitTx, "split to mint outcome A/B for seller");
+
+        // seller places a Sell A @ 50 (crosses the resting Buy @ 55, which is >= 50)
+        placeLimit(m, seller.user, seller.platformUserState, Outcome.A, Side.Sell, 50, 1_000_000n, 31n, [buyerMarketUserState]);
+
+        const bookA = Buffer.from(m.svm.getAccount(m.orderbookA.publicKey)!.data);
+        expect(readPriceLevel(bookA, Side.Buy, 55).head).toBe(0);
+        expect(readPriceLevel(bookA, Side.Sell, 50).head).toBe(0);
+
+        const buyerMusAfter = readMarketUserState(Buffer.from(m.svm.getAccount(buyerMarketUserState)!.data));
+        expect(buyerMusAfter.otABalance).toBe(1_000_000n); // filled at their own resting price of 55
+
+        console.log("✅ Verified: resting Buy A@55 and incoming Sell A@50 now cross instantly via the limit-order path.");
     });
 });

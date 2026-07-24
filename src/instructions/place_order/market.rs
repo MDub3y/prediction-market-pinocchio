@@ -1,9 +1,8 @@
+use super::find_maker_account;
 use crate::state::{
     MarketState, MarketTier, MarketUserState, OrderBookView, PlaceOrderArgs, PlatformUserState,
 };
 use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError};
-
-const FEE_BASIS_POINTS: u64 = 20;
 
 #[inline(always)]
 fn calculate_symmetric_fee(quantity: u64, price: u8, fee_rate_bps: u64) -> u64 {
@@ -20,17 +19,19 @@ fn calculate_symmetric_fee(quantity: u64, price: u8, fee_rate_bps: u64) -> u64 {
 }
 
 pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) -> ProgramResult {
-    let [
-        _user,
-        market_pda,
-        platform_user_state,
-        market_user_state,
-        orderbook,
-        ..,
-    ] = accounts
-    else {
+    if accounts.len() < 5 {
         return Err(ProgramError::NotEnoughAccountKeys);
+    }
+    let accounts_ptr = accounts.as_mut_ptr();
+    let (market_pda, platform_user_state, market_user_state, orderbook) = unsafe {
+        (
+            &mut *accounts_ptr.add(1),
+            &mut *accounts_ptr.add(2),
+            &mut *accounts_ptr.add(3),
+            &mut *accounts_ptr.add(4),
+        )
     };
+    let remaining_accounts = &mut accounts[5..];
 
     let (tier, fee_rate_bps) = unsafe {
         let data = market_pda.borrow_unchecked();
@@ -67,12 +68,9 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     let maker_order = &mut view.orders[head_node_idx];
                     let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
 
-                    // Fetch maker storage account page reference using the seat link
-                    let maker_m_data = AccountView::borrow_unchecked_mut(
-                        accounts
-                            .get_mut(5 + maker_order.user_seat_idx as usize)
-                            .ok_or(ProgramError::NotEnoughAccountKeys)?,
-                    );
+                    // Fetch maker storage account page reference using the seat's recorded pubkey
+                    let maker_m_account = find_maker_account(remaining_accounts, &maker_seat.market_user_state)?;
+                    let maker_m_data = AccountView::borrow_unchecked_mut(maker_m_account);
                     let maker_m_mut = &mut *(maker_m_data.as_mut_ptr() as *mut MarketUserState);
 
                     let match_qty = if taker_remaining < maker_order.quantity {
@@ -144,11 +142,8 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     let maker_order = &mut view.orders[head_node_idx];
                     let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
 
-                    let maker_m_data = AccountView::borrow_unchecked_mut(
-                        accounts
-                            .get_mut(5 + maker_order.user_seat_idx as usize)
-                            .ok_or(ProgramError::NotEnoughAccountKeys)?,
-                    );
+                    let maker_m_account = find_maker_account(remaining_accounts, &maker_seat.market_user_state)?;
+                    let maker_m_data = AccountView::borrow_unchecked_mut(maker_m_account);
                     let maker_m_mut = &mut *(maker_m_data.as_mut_ptr() as *mut MarketUserState);
 
                     let match_qty = if taker_remaining < maker_order.quantity {
