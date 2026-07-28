@@ -117,5 +117,10 @@ pub fn process_claim_winnings(
         platform_user.collateral_available += total_winnings_to_credit;
     }
 
+    pinocchio_log::log!(
+        "ALLEY_CLAIM o={} amt={}",
+        winning_outcome, total_winnings_to_credit
+    );
+
     Ok(())
 }
