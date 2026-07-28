@@ -27,13 +27,20 @@ use pinocchio_system::instructions::CreateAccount;
 /// client only needs to supply accounts for makers actually being crossed, in any order,
 /// and this scans for it. That trades an O(1) index for an O(k) scan over k supplied
 /// accounts (bounded by what fits in a transaction / compute budget anyway).
+/// Returns the matched account together with its position within `remaining` (i.e. an
+/// offset from the start of the maker-accounts slice, NOT the full instruction account
+/// list). Callers add their own base offset (6 for limit orders, 5 for market orders) to
+/// get the absolute instruction-account index, which is logged in fill events so an
+/// off-chain indexer can resolve the maker's wallet directly from the transaction's own
+/// account-key list instead of needing a pubkey encoded in the log text.
 pub(crate) fn find_maker_account<'a>(
     remaining: &'a mut [AccountView],
     target: &Address,
-) -> Result<&'a mut AccountView, ProgramError> {
+) -> Result<(usize, &'a mut AccountView), ProgramError> {
     remaining
         .iter_mut()
-        .find(|acc| acc.address() == target)
+        .position(|acc| acc.address() == target)
+        .map(|idx| (idx, unsafe { &mut *(remaining.as_mut_ptr().add(idx)) }))
         .ok_or(ProgramError::NotEnoughAccountKeys)
 }
 

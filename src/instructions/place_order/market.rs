@@ -69,7 +69,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
 
                     // Fetch maker storage account page reference using the seat's recorded pubkey
-                    let maker_m_account = find_maker_account(remaining_accounts, &maker_seat.market_user_state)?;
+                    let (maker_rel_idx, maker_m_account) = find_maker_account(remaining_accounts, &maker_seat.market_user_state)?;
                     let maker_m_data = AccountView::borrow_unchecked_mut(maker_m_account);
                     let maker_m_mut = &mut *(maker_m_data.as_mut_ptr() as *mut MarketUserState);
 
@@ -107,6 +107,11 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     market_mut.accumulated_platform_fees += fee_platform;
                     market_mut.accumulated_creator_fees += fee_creator;
 
+                    pinocchio_log::log!(
+                        "ALLEY_FILL k=0 o={} s={} p={} q={} mi={}",
+                        args.outcome, args.side, current_price as u64, match_qty, (5 + maker_rel_idx) as u64
+                    );
+
                     taker_remaining -= match_qty;
                     maker_order.quantity -= match_qty;
 
@@ -142,7 +147,7 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                     let maker_order = &mut view.orders[head_node_idx];
                     let maker_seat = &mut *seats_ptr.add(maker_order.user_seat_idx as usize);
 
-                    let maker_m_account = find_maker_account(remaining_accounts, &maker_seat.market_user_state)?;
+                    let (maker_rel_idx, maker_m_account) = find_maker_account(remaining_accounts, &maker_seat.market_user_state)?;
                     let maker_m_data = AccountView::borrow_unchecked_mut(maker_m_account);
                     let maker_m_mut = &mut *(maker_m_data.as_mut_ptr() as *mut MarketUserState);
 
@@ -179,6 +184,11 @@ pub fn execute_market_order(accounts: &mut [AccountView], args: &PlaceOrderArgs)
                         taker_m_mut.ot_b_balance += match_qty;
                         maker_seat.ot_b_locked -= match_qty;
                     }
+
+                    pinocchio_log::log!(
+                        "ALLEY_FILL k=0 o={} s={} p={} q={} mi={}",
+                        args.outcome, args.side, current_price as u64, match_qty, (5 + maker_rel_idx) as u64
+                    );
 
                     taker_remaining -= match_qty;
                     maker_order.quantity -= match_qty;
