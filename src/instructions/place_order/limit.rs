@@ -86,7 +86,7 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
                     let maker_seat = &mut *target_seats_ptr.add(maker_order.user_seat_idx as usize);
                     let maker_pubkey = maker_seat.market_user_state;
 
-                    let maker_m_account = find_maker_account(remaining_accounts, &maker_pubkey)?;
+                    let (maker_rel_idx, maker_m_account) = find_maker_account(remaining_accounts, &maker_pubkey)?;
                     let maker_m_raw = maker_m_account.borrow_unchecked_mut();
                     let maker_m_mut = &mut *(maker_m_raw.as_mut_ptr() as *mut MarketUserState);
 
@@ -117,6 +117,11 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
                         taker_m_mut.ot_b_balance += match_qty;
                         maker_seat.ot_b_locked -= match_qty;
                     }
+
+                    pinocchio_log::log!(
+                        "ALLEY_FILL k=0 o={} s={} p={} q={} mi={}",
+                        args.outcome, args.side, price as u64, match_qty, (6 + maker_rel_idx) as u64
+                    );
 
                     taker_remaining -= match_qty;
                     maker_order.quantity -= match_qty;
@@ -149,7 +154,7 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
                     let maker_seat = &mut *target_seats_ptr.add(maker_order.user_seat_idx as usize);
                     let maker_pubkey = maker_seat.market_user_state;
 
-                    let maker_m_account = find_maker_account(remaining_accounts, &maker_pubkey)?;
+                    let (maker_rel_idx, maker_m_account) = find_maker_account(remaining_accounts, &maker_pubkey)?;
                     let maker_m_raw = maker_m_account.borrow_unchecked_mut();
                     let maker_m_mut = &mut *(maker_m_raw.as_mut_ptr() as *mut MarketUserState);
 
@@ -184,6 +189,11 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
                     maker_m_mut.collateral_claimable += fee_maker;
                     market_mut.accumulated_platform_fees += fee_platform;
                     market_mut.accumulated_creator_fees += fee_creator;
+
+                    pinocchio_log::log!(
+                        "ALLEY_FILL k=0 o={} s={} p={} q={} mi={}",
+                        args.outcome, args.side, price as u64, match_qty, (6 + maker_rel_idx) as u64
+                    );
 
                     taker_remaining -= match_qty;
                     maker_order.quantity -= match_qty;
@@ -228,7 +238,7 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
 
                     let maker_seat = &mut view_comp.seats[maker_order.user_seat_idx as usize];
                     let maker_pubkey = maker_seat.market_user_state;
-                    let maker_m_account = find_maker_account(remaining_accounts, &maker_pubkey)?;
+                    let (maker_rel_idx, maker_m_account) = find_maker_account(remaining_accounts, &maker_pubkey)?;
                     let maker_m_raw = maker_m_account.borrow_unchecked_mut();
                     let maker_m_mut = &mut *(maker_m_raw.as_mut_ptr() as *mut MarketUserState);
 
@@ -262,6 +272,16 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
                         maker_m_mut.ot_a_balance += match_qty;
                     }
 
+                    // kind=1: combo mint match. Taker acquires `args.outcome` at
+                    // taker_matched_price; the maker's own balance isn't debited the mirror
+                    // amount the way a direct cross would be (their side of the pair is minted
+                    // fresh from the taker's collateral), so the indexer should record this as
+                    // a taker-only fill, not a symmetric maker trade.
+                    pinocchio_log::log!(
+                        "ALLEY_FILL k=1 o={} s=0 p={} q={} mi={}",
+                        args.outcome, taker_matched_price as u64, match_qty, (6 + maker_rel_idx) as u64
+                    );
+
                     taker_remaining -= match_qty;
                     maker_order.quantity -= match_qty;
 
@@ -288,6 +308,11 @@ pub fn execute_limit_order(accounts: &mut [AccountView], args: &PlaceOrderArgs) 
 
         // 3. Rest any unmatched balance on the target orderbook
         if taker_remaining > 0 {
+            pinocchio_log::log!(
+                "ALLEY_REST o={} s={} p={} q={}",
+                args.outcome, args.side, args.price as u64, taker_remaining
+            );
+
             let mut seat_idx: Option<usize> = None;
             let mut available_tombstone_idx: Option<usize> = None;
 
